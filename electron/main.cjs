@@ -54,8 +54,8 @@ function getSystemItemId(code) {
 
 function recordPaymentSale({ ref, amount, cashierName, cashierId, paymentMode = 'Cash', mpesaCode = null, saleType = 'pos', itemId = null, itemName = null, itemCode = null, quantity = 1, price = null, total = null, material = null, colorCode = null }) {
     const saleRes = db.prepare(`
-        INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(ref, amount, cashierName || 'N/A', cashierId, paymentMode || 'Cash', mpesaCode || null, saleType);
     const saleId = saleRes.lastInsertRowid;
 
@@ -651,7 +651,7 @@ ipcMain.handle('delete-color', (_, id) => {
 ipcMain.handle('process-sale', (_, saleData) => {
     const trans = db.transaction((data) => {
         const ref = 'REF-' + Date.now();
-        const res = db.prepare('INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, cashier_id, sale_type) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        const res = db.prepare('INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, cashier_id, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)')
             .run(ref, data.total, data.cashier, data.paymentMode, data.mpesaCode || null, data.cashierId, 'pos');
         const saleId = res.lastInsertRowid;
 
@@ -684,7 +684,7 @@ ipcMain.handle('get-sales', () => db.prepare(`
     SELECT s.*, 
     EXISTS(SELECT 1 FROM sale_items WHERE sale_id = s.id AND (material IS NOT NULL OR color_code IS NOT NULL)) as is_custom
     FROM sales s
-    ORDER BY created_at DESC
+    ORDER BY COALESCE(s.created_at, s.date) DESC
 `).all());
 ipcMain.handle('get-sale-items', (_, saleId) => db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(saleId));
 
@@ -713,20 +713,19 @@ ipcMain.handle('upsert-user', (_, u) => {
 // Reports
 ipcMain.handle('get-sales-reports', (_, range) => {
     try {
+        const dateExpr = "COALESCE(sales.created_at, sales.date)";
         let filter = "1=1";
-        if (range === 'daily') filter = "date(created_at, 'localtime') = date('now', 'localtime')";
-        else if (range === 'weekly') filter = "date(created_at, 'localtime') >= date('now', 'localtime', '-7 days')";
-        else if (range === 'monthly') filter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of month')";
-        else if (range === 'yearly') filter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of year')";
+        if (range === 'daily') filter = `date(${dateExpr}, 'localtime') = date('now', 'localtime')`;
+        else if (range === 'weekly') filter = `date(${dateExpr}, 'localtime') >= date('now', 'localtime', '-7 days')`;
+        else if (range === 'monthly') filter = `date(${dateExpr}, 'localtime') >= date('now', 'localtime', 'start of month')`;
+        else if (range === 'yearly') filter = `date(${dateExpr}, 'localtime') >= date('now', 'localtime', 'start of year')`;
 
         console.log(`--- Generating Reports (Range: ${range}) ---`);
         const summary = db.prepare(`SELECT count(*) as count, coalesce(sum(total_amount), 0) as total FROM sales WHERE ${filter}`).get();
         const modes = db.prepare(`SELECT payment_mode, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY payment_mode`).all();
         
-        // Use a more specific filter for joined queries to avoid ambiguity
-        const joinFilter = filter.replace(/created_at/g, 'sales.created_at');
-        console.log('--- Running Items Query with filter:', joinFilter);
-        const items = db.prepare(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${joinFilter} GROUP BY item_name ORDER BY qty DESC LIMIT 10`).all();
+        console.log('--- Running Items Query with filter:', filter);
+        const items = db.prepare(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${filter} GROUP BY item_name ORDER BY qty DESC LIMIT 10`).all();
         const salesByType = db.prepare(`SELECT COALESCE(sale_type, 'pos') as sale_type, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY COALESCE(sale_type, 'pos')`).all();
 
         // Expenses reporting

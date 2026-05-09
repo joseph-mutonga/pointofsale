@@ -245,14 +245,25 @@ function initDb() {
   if (!salesCols.find(c => c.name === 'created_at')) {
     console.log('Migrating sales: adding created_at column');
     addCol('sales', 'created_at', 'DATETIME'); // Cannot use CURRENT_TIMESTAMP in ALTER TABLE
-    
-    // If there's an old 'date' column, migrate data
-    if (salesCols.find(c => c.name === 'date')) {
-        console.log('Migrating data from date to created_at');
-        db.prepare("UPDATE sales SET created_at = date").run();
+  }
+
+  // Migrate any existing sales rows from the legacy date field into created_at
+  if (salesCols.find(c => c.name === 'date')) {
+    console.log('Migrating data from date to created_at for legacy sales rows');
+    const migrationInfo = db.prepare("UPDATE sales SET created_at = COALESCE(created_at, date) WHERE created_at IS NULL").run();
+    if (migrationInfo.changes > 0) {
+      console.log(`✅ Migrated ${migrationInfo.changes} legacy sales rows into created_at`);
+    } else {
+      console.log('No legacy sales rows required migration');
     }
   }
-  
+
+  // Also backfill any rows with null created_at to the legacy date field if available
+  const backfillInfo = db.prepare("UPDATE sales SET created_at = COALESCE(created_at, date) WHERE created_at IS NULL").run();
+  if (backfillInfo.changes > 0) {
+    console.log(`✅ Backfilled ${backfillInfo.changes} sales rows with null created_at from the legacy date field`);
+  }
+
   addCol('sales', 'payment_mode', "TEXT DEFAULT 'Cash'");
   addCol('sales', 'mpesa_code', 'TEXT');
   addCol('sales', 'cashier_id', 'INTEGER');
