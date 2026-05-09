@@ -6,15 +6,7 @@ import './hub.css';
 import logo from './assets/logo.png';
 
 function App() {
-    const [user, setUser] = useState(() => {
-        try {
-            const saved = localStorage.getItem('pos_user');
-            return saved ? JSON.parse(saved) : null;
-        } catch (e) {
-            console.error('Failed to parse user session:', e);
-            return null;
-        }
-    });
+    const [user, setUser] = useState(null);
     const [view, setView] = useState(() => {
         return localStorage.getItem('pos_view') || 'hub';
     });
@@ -27,7 +19,6 @@ function App() {
     const [qty, setQty] = useState('1');
     const [paymentMode, setPaymentMode] = useState('Cash');
     const [mpesaCode, setMpesaCode] = useState('');
-    const [focusedInput, setFocusedInput] = useState('code');
     const [materials, setMaterials] = useState([]);
     const [colors, setColors] = useState([]);
     const [selectedMaterial, setSelectedMaterial] = useState('');
@@ -63,10 +54,14 @@ function App() {
         setTimeout(() => setToast(null), 3000);
     };
 
+    const handleLogout = () => {
+        setUser(null);
+        setView('hub');
+        setShowAdmin(false);
+    };
+
     useEffect(() => {
-        if (user) {
-            localStorage.setItem('pos_user', JSON.stringify(user));
-        } else {
+        if (!user) {
             localStorage.removeItem('pos_user');
             localStorage.removeItem('pos_view');
             localStorage.removeItem('pos_show_admin');
@@ -111,18 +106,6 @@ function App() {
         }
     };
 
-    const handleKeypad = (val) => {
-        if (focusedInput === 'code') setCode(p => p + val);
-        else if (focusedInput === 'qty') setQty(p => p === '1' ? String(val) : p + val);
-        else if (focusedInput === 'mpesa') setMpesaCode(p => p + val);
-    };
-
-    const handleClear = () => {
-        if (focusedInput === 'code') setCode('');
-        else if (focusedInput === 'qty') setQty(1);
-        else if (focusedInput === 'mpesa') setMpesaCode('');
-    };
-
     const addToCart = async () => {
         const numericQty = Number(qty);
         const it = items.find(i => (i.item_code || i.code) === code);
@@ -153,7 +136,6 @@ function App() {
         setQty('1');
         setSelectedMaterial('');
         setSelectedColor('');
-        setFocusedInput('code');
     };
 
     const total = useMemo(() => cart.reduce((s, i) => s + (i.price * i.qty), 0), [cart]);
@@ -442,7 +424,7 @@ function App() {
                 try {
                     const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
                     return m.type || 'Custom';
-                } catch (e) { return 'Custom'; }
+                } catch { return 'Custom'; }
             })()}</span></div>
             <div class="row"><span>Style:</span><span>${ord.style_name || 'Custom'}</span></div>
             <div class="row"><span>Fabric:</span><span>${ord.material_name || 'Own Material'}</span></div>
@@ -458,13 +440,13 @@ function App() {
                         .filter(([k, v]) => k !== 'notes' && k !== 'type' && v)
                         .map(([k, v]) => `<div style="text-transform: capitalize;">${k.replace(/_/g, ' ')}: ${v}</div>`)
                         .join('');
-                } catch (e) { return 'N/A'; }
+                } catch { return 'N/A'; }
             })()}
             ${(() => {
                 try {
                     const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
                     return m.notes ? `<div style="margin-top: 3px; font-style: italic;">Notes: ${m.notes}</div>` : '';
-                } catch (e) { return ''; }
+                } catch { return ''; }
             })()}
           </div>
 
@@ -785,7 +767,7 @@ function App() {
                         {user.role === 'admin' && (
                             <button className="btn-terminal-action" onClick={() => setShowAdmin(true)} style={{ color: '#00f2ff', background: 'rgba(0, 242, 255, 0.1)', border: '1px solid #00f2ff', padding: '0.6rem 1.5rem', cursor: 'pointer', fontFamily: 'Orbitron' }}>SYSTEM ADMIN</button>
                         )}
-                        <button className="btn-futuristic-exit" onClick={() => setUser(null)}>TERMINATE SESSION</button>
+                        <button className="btn-futuristic-exit" onClick={handleLogout}>TERMINATE SESSION</button>
                     </div>
                 </div>
             </div>
@@ -809,7 +791,7 @@ function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                         <button className="btn" style={{ background: '#10b981', color: 'white', width: 'auto' }} onClick={() => window.location.reload()} title="Refresh System Data">↻ Refresh App</button>
                         <span style={{ fontWeight: '600' }}>{user.full_name}</span>
-                        <button className="btn btn-danger" style={{ width: 'auto' }} onClick={() => setUser(null)}>Logout</button>
+                        <button className="btn btn-danger" style={{ width: 'auto' }} onClick={handleLogout}>Logout</button>
                     </div>
                 </header>
 
@@ -820,7 +802,6 @@ function App() {
                             <div className="form-group">
                                 <label className="label">Item Code</label>
                                 <input value={code}
-                                    onFocus={() => setFocusedInput('code')}
                                     onChange={e => setCode(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && addToCart()}
                                     placeholder="Scan code..." autoFocus />
@@ -860,7 +841,6 @@ function App() {
                             <div className="form-group">
                                 <label className="label">Quantity</label>
                                 <input type="number" value={qty}
-                                    onFocus={() => setFocusedInput('qty')}
                                     onChange={e => setQty(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && addToCart()}
                                 />
@@ -877,7 +857,6 @@ function App() {
                                     <div className="form-group">
                                         <label className="label">M-Pesa Confirmation Code</label>
                                         <input value={mpesaCode}
-                                            onFocus={() => setFocusedInput('mpesa')}
                                             onChange={e => setMpesaCode(e.target.value)}
                                             onKeyDown={e => e.key === 'Enter' && handleProcess()}
                                             placeholder="Type code..." />
@@ -1555,7 +1534,7 @@ function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <button className="btn" style={{ background: '#10b981', color: 'white', width: 'auto' }} onClick={() => window.location.reload()}>↻ Refresh App</button>
                         <span style={{ fontWeight: '600' }}>{user.full_name}</span>
-                        <button className="btn btn-danger" style={{ width: 'auto' }} onClick={() => setUser(null)}>Logout</button>
+                        <button className="btn btn-danger" style={{ width: 'auto' }} onClick={handleLogout}>Logout</button>
                     </div>
                 </header>
 

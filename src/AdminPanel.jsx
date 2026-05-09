@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import logo from './assets/logo.png';
 
-export default function AdminPanel({ user, onBack, onGoToPOS, showToast, printExpenseReceipt, printWorkforcePaymentReceipt, base64Logo, gallery, loadData }) {
+export default function AdminPanel({ user, onBack, showToast, printExpenseReceipt, printWorkforcePaymentReceipt, base64Logo, loadData }) {
     const [view, setView] = useState('inventory');
     const [items, setItems] = useState([]);
     const [users, setUsers] = useState([]);
@@ -656,7 +656,7 @@ export default function AdminPanel({ user, onBack, onGoToPOS, showToast, printEx
                                     <thead><tr><th>Ref</th><th>Date</th><th>Sold By</th><th>Type</th><th>Mode</th><th>Total</th><th>Action</th></tr></thead>
                                     <tbody>
                                         {sales.filter(s => {
-                                            const d = new Date(s.created_at + 'Z');
+                                            const d = new Date(s.created_at);
                                             const localDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                                             const matchesDate = !filterDate || localDateStr === filterDate;
                                             const matchesRef = !searchRef || s.ref_number.toLowerCase().includes(searchRef.toLowerCase());
@@ -708,7 +708,7 @@ export default function AdminPanel({ user, onBack, onGoToPOS, showToast, printEx
                                             </tr>
                                         ))}
                                         {sales.filter(s => {
-                                            const d = new Date(s.created_at + 'Z');
+                                            const d = new Date(s.created_at);
                                             const localDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                                             const matchesDate = !filterDate || localDateStr === filterDate;
                                             const matchesRef = !searchRef || s.ref_number.toLowerCase().includes(searchRef.toLowerCase());
@@ -1093,7 +1093,7 @@ export default function AdminPanel({ user, onBack, onGoToPOS, showToast, printEx
                                                             try {
                                                                 const m = JSON.parse(o.measurements || '{}');
                                                                 return <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>{m.type || 'Custom'}</div>;
-                                                            } catch (e) { return null; }
+                                                            } catch { return null; }
                                                         })()}
                                                         <div style={{ fontWeight: '500' }}>{o.style_name || 'Custom Design'}</div>
                                                         <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{o.material_name || 'Customer Material'}</div>
@@ -2014,7 +2014,7 @@ export default function AdminPanel({ user, onBack, onGoToPOS, showToast, printEx
                                                     </div>
                                                 </>
                                             );
-                                        } catch (e) {
+                                        } catch {
                                             return <div>Error parsing measurements</div>;
                                         }
                                     })()}

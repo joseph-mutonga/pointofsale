@@ -329,7 +329,7 @@ export default function TailoringView({
                                                 try {
                                                     const m = JSON.parse(o.measurements || '{}');
                                                     return <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>{m.type || 'Custom'}</div>;
-                                                } catch (e) { return null; }
+                                                } catch { return null; }
                                             })()}
                                             <div style={{ fontSize: '0.8rem' }}>Fabric: {o.material_name || 'Provided'}</div>
                                         </td>
@@ -459,13 +459,15 @@ export default function TailoringView({
                                                     ))}
                                             </div>
                                         );
-                                    } catch (e) { return null; }
+                                    } catch { return null; }
                                 })()}
                                 {(() => {
                                     try {
                                         const m = JSON.parse(tailoringOrderToView.measurements || '{}');
-                                        return m.notes ? <div style={{ marginTop: '15px', padding: '10px', background: 'rgba(255,255,0,0.1)', color: '#fef08a', borderRadius: '6px', fontStyle: 'italic' }}>"{m.notes}"</div> : null;
-                                    } catch (e) { return null; }
+                                        return m.notes ? <div style={{ marginTop: '15px', padding: '10px', background: 'rgba(255,255,0,0.1)', color: '#fef08a', borderRadius: '6px', fontStyle: 'italic' }}>
+                                            "{m.notes}"
+                                        </div> : null;
+                                    } catch { return null; }
                                 })()}
                             </div>
                         </div>

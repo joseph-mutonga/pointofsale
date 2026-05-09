@@ -47,6 +47,27 @@ function createWindow() {
     }
 }
 
+function getSystemItemId(code) {
+    const row = db.prepare('SELECT id FROM items WHERE code = ?').get(code);
+    return row ? row.id : null;
+}
+
+function recordPaymentSale({ ref, amount, cashierName, cashierId, paymentMode = 'Cash', mpesaCode = null, saleType = 'pos', itemId = null, itemName = null, itemCode = null, quantity = 1, price = null, total = null, material = null, colorCode = null }) {
+    const saleRes = db.prepare(`
+        INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(ref, amount, cashierName || 'N/A', cashierId, paymentMode || 'Cash', mpesaCode || null, saleType);
+    const saleId = saleRes.lastInsertRowid;
+
+    if (itemId != null) {
+        db.prepare(`
+            INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total, material, color_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(saleId, itemId, itemName || 'Payment', itemCode || null, quantity, price !== null ? price : amount, total !== null ? total : amount, material || null, colorCode || null);
+    }
+
+    return saleId;
+}
 
 app.whenReady().then(() => {
     protocol.handle('pos-gallery', (request) => {
@@ -257,21 +278,23 @@ ipcMain.handle('add-service', (_, data) => {
             if (data.paid_amount > 0) {
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
+                const serviceItemId = getSystemItemId('SYSTEM_SERVICE');
 
-                const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(code, data.paid_amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'service');
-
-                const saleId = resSale.lastInsertRowid;
-                const serviceItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_SERVICE');
-
-                if (serviceItem) {
-                    db.prepare(`
-                        INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    `).run(saleId, serviceItem.id, `[Service Deposit] ${data.item_description}`, code, 1, data.paid_amount, data.paid_amount);
-                }
+                recordPaymentSale({
+                    ref: code,
+                    amount: data.paid_amount,
+                    cashierName: data.cashier_name || 'N/A',
+                    cashierId: cid,
+                    paymentMode: data.payment_mode || 'Cash',
+                    mpesaCode: data.mpesa_code || null,
+                    saleType: 'service',
+                    itemId: serviceItemId,
+                    itemName: `[Service Deposit] ${data.item_description}`,
+                    itemCode: code,
+                    quantity: 1,
+                    price: data.paid_amount,
+                    total: data.paid_amount
+                });
             }
         });
 
@@ -306,27 +329,28 @@ ipcMain.handle('update-service-payment', (_, data) => {
 
             // Record this specific payment in sales table
             if (data.amount > 0) {
-                // Check if cashier exists to avoid FK error
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
-
                 const ref = `${current.service_code}-P${Date.now().toString().slice(-4)}`;
-                const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(ref, data.amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'service');
+                const serviceItemId = getSystemItemId('SYSTEM_SERVICE');
 
-                const saleId = resSale.lastInsertRowid;
-                const serviceItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_SERVICE');
+                recordPaymentSale({
+                    ref,
+                    amount: data.amount,
+                    cashierName: data.cashier_name || 'N/A',
+                    cashierId: cid,
+                    paymentMode: data.payment_mode || 'Cash',
+                    mpesaCode: data.mpesa_code || null,
+                    saleType: 'service',
+                    itemId: serviceItemId,
+                    itemName: `[Service Balance] ${current.item_description}`,
+                    itemCode: current.service_code,
+                    quantity: 1,
+                    price: data.amount,
+                    total: data.amount
+                });
 
-                if (serviceItem) {
-                    db.prepare(`
-                        INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    `).run(saleId, serviceItem.id, `[Service Balance] ${current.item_description}`, current.service_code, 1, data.amount, data.amount);
-
-                    console.log(`✅ Payment recorded in sales (Ref: ${ref}, Sale ID: ${saleId})`);
-                }
+                console.log(`✅ Payment recorded in sales (Ref: ${ref})`);
             }
         });
 
@@ -353,17 +377,23 @@ ipcMain.handle('add-fitting-deposit', (_, data) => {
             if (data.paid_amount > 0) {
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
-
-                const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(code, data.paid_amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'layaway');
-
-                const saleId = resSale.lastInsertRowid;
-                db.prepare(`
-                    INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total, material, color_code)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `).run(saleId, data.item_id, `[Fitting Deposit] ${data.item_name}`, code, 1, data.paid_amount, data.paid_amount, data.material, data.color);
+                recordPaymentSale({
+                    ref: code,
+                    amount: data.paid_amount,
+                    cashierName: data.cashier_name || 'N/A',
+                    cashierId: cid,
+                    paymentMode: data.payment_mode || 'Cash',
+                    mpesaCode: data.mpesa_code || null,
+                    saleType: 'layaway',
+                    itemId: data.item_id,
+                    itemName: `[Fitting Deposit] ${data.item_name}`,
+                    itemCode: code,
+                    quantity: 1,
+                    price: data.paid_amount,
+                    total: data.paid_amount,
+                    material: data.material,
+                    colorCode: data.color
+                });
             }
         });
         trans();
@@ -384,20 +414,27 @@ ipcMain.handle('update-fitting-payment', (_, data) => {
                 .run(newPaid, status, data.payment_mode || 'Cash', data.mpesa_code || null, data.id);
 
             if (data.amount > 0) {
-                const ref = `${current.fitting_code}-P${Date.now().toString().slice(-4)}`;
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
+                const ref = `${current.fitting_code}-P${Date.now().toString().slice(-4)}`;
 
-                const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(ref, data.amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'layaway');
-
-                const saleId = resSale.lastInsertRowid;
-                db.prepare(`
-                    INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total, material, color_code)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `).run(saleId, current.item_id, `[Fitting Payment] ${current.item_name}`, current.fitting_code, 1, data.amount, data.amount, current.material, current.color);
+                recordPaymentSale({
+                    ref,
+                    amount: data.amount,
+                    cashierName: data.cashier_name || 'N/A',
+                    cashierId: cid,
+                    paymentMode: data.payment_mode || 'Cash',
+                    mpesaCode: data.mpesa_code || null,
+                    saleType: 'layaway',
+                    itemId: current.item_id,
+                    itemName: `[Fitting Payment] ${current.item_name}`,
+                    itemCode: current.fitting_code,
+                    quantity: 1,
+                    price: data.amount,
+                    total: data.amount,
+                    material: current.material,
+                    colorCode: current.color
+                });
             }
         });
         trans();
@@ -495,14 +532,6 @@ ipcMain.handle('add-tailoring-order', (_, data) => {
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
 
-                const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(code, data.paid_amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'tailoring');
-
-                const saleId = resSale.lastInsertRowid;
-                
-                // Get or Create System Item
                 let tailorItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
                 if (!tailorItem) {
                     const resNew = db.prepare('INSERT INTO items (item_name, item_code, code, price, stock, category) VALUES (?, ?, ?, ?, ?, ?)')
@@ -510,12 +539,23 @@ ipcMain.handle('add-tailoring-order', (_, data) => {
                     tailorItem = { id: resNew.lastInsertRowid };
                 }
 
-                db.prepare(`
-                    INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(saleId, tailorItem.id, `[Tailoring Deposit] ${data.customer_name}`, code, 1, data.paid_amount, data.paid_amount);
+                recordPaymentSale({
+                    ref: code,
+                    amount: data.paid_amount,
+                    cashierName: data.cashier_name || 'N/A',
+                    cashierId: cid,
+                    paymentMode: data.payment_mode || 'Cash',
+                    mpesaCode: data.mpesa_code || null,
+                    saleType: 'tailoring',
+                    itemId: tailorItem.id,
+                    itemName: `[Tailoring Deposit] ${data.customer_name}`,
+                    itemCode: code,
+                    quantity: 1,
+                    price: data.paid_amount,
+                    total: data.paid_amount
+                });
                 
-                console.log('  -> Financial record created. Sale ID:', saleId);
+                console.log('  -> Financial record created.');
             }
             return code;
         });
@@ -546,28 +586,28 @@ ipcMain.handle('update-tailoring-payment', (_, data) => {
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
 
-                const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(ref, data.amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'tailoring');
-
-                const saleId = resSale.lastInsertRowid;
-                const tailorItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
-
+                let tailorItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
                 if (!tailorItem) {
-                    console.error('❌ SYSTEM_TAILORING item missing from database!');
-                    db.prepare('INSERT INTO items (item_name, item_code, code, price, stock, category) VALUES (?, ?, ?, ?, ?, ?)')
+                    const resNew = db.prepare('INSERT INTO items (item_name, item_code, code, price, stock, category) VALUES (?, ?, ?, ?, ?, ?)')
                         .run('Tailoring Revenue', 'TAILOR', 'SYSTEM_TAILORING', 0, 999999, 'Services');
-                    const newItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
-                    var tId = newItem.id;
-                } else {
-                    var tId = tailorItem.id;
+                    tailorItem = { id: resNew.lastInsertRowid };
                 }
 
-                db.prepare(`
-                    INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(saleId, tId, `[Tailoring Payment] ${current.customer_name}`, current.order_code, 1, data.amount, data.amount);
+                recordPaymentSale({
+                    ref,
+                    amount: data.amount,
+                    cashierName: data.cashier_name || 'N/A',
+                    cashierId: cid,
+                    paymentMode: data.payment_mode || 'Cash',
+                    mpesaCode: data.mpesa_code || null,
+                    saleType: 'tailoring',
+                    itemId: tailorItem.id,
+                    itemName: `[Tailoring Payment] ${current.customer_name}`,
+                    itemCode: current.order_code,
+                    quantity: 1,
+                    price: data.amount,
+                    total: data.amount
+                });
             }
         });
         trans();
@@ -611,8 +651,8 @@ ipcMain.handle('delete-color', (_, id) => {
 ipcMain.handle('process-sale', (_, saleData) => {
     const trans = db.transaction((data) => {
         const ref = 'REF-' + Date.now();
-        const res = db.prepare('INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, cashier_id) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(ref, data.total, data.cashier, data.paymentMode, data.mpesaCode || null, data.cashierId);
+        const res = db.prepare('INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, cashier_id, sale_type) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(ref, data.total, data.cashier, data.paymentMode, data.mpesaCode || null, data.cashierId, 'pos');
         const saleId = res.lastInsertRowid;
 
         const ins = db.prepare(`
@@ -687,7 +727,7 @@ ipcMain.handle('get-sales-reports', (_, range) => {
         const joinFilter = filter.replace(/created_at/g, 'sales.created_at');
         console.log('--- Running Items Query with filter:', joinFilter);
         const items = db.prepare(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${joinFilter} GROUP BY item_name ORDER BY qty DESC LIMIT 10`).all();
-        const salesByType = db.prepare(`SELECT sale_type, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY sale_type`).all();
+        const salesByType = db.prepare(`SELECT COALESCE(sale_type, 'pos') as sale_type, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY COALESCE(sale_type, 'pos')`).all();
 
         // Expenses reporting
         let expFilter = "1=1";
