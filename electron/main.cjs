@@ -1,10 +1,17 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const { db, initDb, dbPath } = require('./db.cjs');
 
 initDb();
+
+// Register privileged schemes
+protocol.registerSchemesAsPrivileged([
+    { scheme: 'pos-gallery', privileges: { bypassCSP: true, supportFetchAPI: true, secure: true, standard: true } }
+]);
+
 
 const isDev = !app.isPackaged;
 
@@ -40,7 +47,80 @@ function createWindow() {
     }
 }
 
-app.whenReady().then(createWindow);
+
+app.whenReady().then(() => {
+    protocol.handle('pos-gallery', (request) => {
+        const url = request.url.replace('pos-gallery://', '');
+        const decodedUrl = decodeURIComponent(url);
+        const galleryDir = path.join(app.getPath('userData'), 'gallery');
+        const filePath = path.join(galleryDir, decodedUrl);
+        return net.fetch(pathToFileURL(filePath).toString());
+    });
+    createWindow();
+});
+
+// Style Gallery (Moved Up for Registration)
+ipcMain.handle('get-gallery', () => {
+    try {
+        console.log('--- Fetching Style Gallery ---');
+        const rows = db.prepare('SELECT * FROM gallery ORDER BY created_at DESC').all();
+        console.log(`--- Found ${rows.length} gallery items ---`);
+        return rows;
+    } catch (e) {
+        console.error('get-gallery error:', e);
+        return [];
+    }
+});
+
+ipcMain.handle('add-gallery-item', (_, data) => {
+    try {
+        console.log('--- Adding Style to Gallery ---', data.title);
+        
+        let imageToSave = data.image_data; // fallback for old base64 logic if any
+        
+        // If data.image_path is provided, copy the physical file
+        if (data.image_path) {
+            const galleryDir = path.join(app.getPath('userData'), 'gallery');
+            if (!fs.existsSync(galleryDir)) {
+                fs.mkdirSync(galleryDir, { recursive: true });
+            }
+            const ext = path.extname(data.image_path) || '.jpg';
+            const fileName = `gallery_${Date.now()}${ext}`;
+            const destPath = path.join(galleryDir, fileName);
+            fs.copyFileSync(data.image_path, destPath);
+            imageToSave = `pos-gallery://${fileName}`;
+        }
+
+        const res = db.prepare('INSERT INTO gallery (title, image_data, category) VALUES (?, ?, ?)')
+            .run(data.title, imageToSave, data.category);
+        console.log('--- Style Saved. ID:', res.lastInsertRowid);
+        return { success: true, id: res.lastInsertRowid };
+    } catch (e) {
+        console.error('add-gallery-item error:', e);
+        return { success: false, message: e.message };
+    }
+});
+
+ipcMain.handle('update-gallery-item', (_, data) => {
+    try {
+        db.prepare('UPDATE gallery SET title = ?, image_data = ?, category = ? WHERE id = ?')
+            .run(data.title, data.image_data, data.category, data.id);
+        return { success: true };
+    } catch (e) {
+        console.error('update-gallery-item error:', e);
+        return { success: false, message: e.message };
+    }
+});
+
+ipcMain.handle('delete-gallery-item', (_, id) => {
+    try {
+        db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
+        return { success: true };
+    } catch (e) {
+        console.error('delete-gallery-item error:', e);
+        return { success: false, message: e.message };
+    }
+});
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
@@ -58,6 +138,34 @@ ipcMain.handle('login', (_, username, password) => {
     }
     console.log('Login failed: Invalid credentials');
     return { success: false, message: 'Invalid credentials' };
+});
+
+ipcMain.handle('get-app-logo', () => {
+    try {
+        const logoPath = isDev
+            ? path.join(app.getAppPath(), 'src', 'assets', 'logo.png')
+            : path.join(app.getAppPath(), 'dist', 'assets', 'logo-DKdrsMHN.png'); // Use the known hashed name or look it up
+
+        // Fallback: If the hashed name changes, we can try to find ANY png in dist/assets starting with logo
+        let finalPath = logoPath;
+        if (!isDev && !fs.existsSync(logoPath)) {
+            const assetsDir = path.join(app.getAppPath(), 'dist', 'assets');
+            if (fs.existsSync(assetsDir)) {
+                const files = fs.readdirSync(assetsDir);
+                const found = files.find(f => f.startsWith('logo-') && f.endsWith('.png'));
+                if (found) finalPath = path.join(assetsDir, found);
+            }
+        }
+
+        if (fs.existsSync(finalPath)) {
+            const bitmap = fs.readFileSync(finalPath);
+            return `data:image/png;base64,${bitmap.toString('base64')}`;
+        }
+        return '';
+    } catch (e) {
+        console.error('get-app-logo error:', e);
+        return '';
+    }
 });
 
 // Items
@@ -151,7 +259,7 @@ ipcMain.handle('add-service', (_, data) => {
                 const cid = cashier ? cashier.id : null;
 
                 const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, type)
+                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(code, data.paid_amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'service');
 
@@ -204,7 +312,7 @@ ipcMain.handle('update-service-payment', (_, data) => {
 
                 const ref = `${current.service_code}-P${Date.now().toString().slice(-4)}`;
                 const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, type)
+                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(ref, data.amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'service');
 
@@ -232,22 +340,22 @@ ipcMain.handle('update-service-payment', (_, data) => {
 });
 
 // Fitting Deposits
-ipcMain.handle('get-fitting-deposits', () => db.prepare('SELECT * FROM fitting_deposits ORDER BY created_at DESC').all());
+ipcMain.handle('get-fitting-deposits', () => db.prepare('SELECT * FROM fitting_deposits ORDER BY updated_at DESC').all());
 ipcMain.handle('add-fitting-deposit', (_, data) => {
     try {
         const code = 'FIT-' + Math.random().toString(36).substr(2, 6).toUpperCase();
         const trans = db.transaction(() => {
             db.prepare(`
-                INSERT INTO fitting_deposits (fitting_code, customer_name, customer_phone, item_id, item_name, material, color, total_amount, paid_amount)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(code, data.customer_name, data.customer_phone, data.item_id, data.item_name, data.material, data.color, data.total_amount, data.paid_amount);
+                INSERT INTO fitting_deposits (fitting_code, customer_name, customer_phone, item_id, item_name, material, color, total_amount, paid_amount, payment_mode, mpesa_code)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(code, data.customer_name, data.customer_phone, data.item_id, data.item_name, data.material, data.color, data.total_amount, data.paid_amount, data.payment_mode || 'Cash', data.mpesa_code || null);
 
             if (data.paid_amount > 0) {
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
 
                 const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, type)
+                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(code, data.paid_amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'layaway');
 
@@ -272,8 +380,8 @@ ipcMain.handle('update-fitting-payment', (_, data) => {
             const newPaid = Number(current.paid_amount) + Number(data.amount);
             const status = newPaid >= current.total_amount ? 'completed' : current.status;
 
-            db.prepare('UPDATE fitting_deposits SET paid_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                .run(newPaid, status, data.id);
+            db.prepare('UPDATE fitting_deposits SET paid_amount = ?, status = ?, payment_mode = ?, mpesa_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+                .run(newPaid, status, data.payment_mode || 'Cash', data.mpesa_code || null, data.id);
 
             if (data.amount > 0) {
                 const ref = `${current.fitting_code}-P${Date.now().toString().slice(-4)}`;
@@ -281,7 +389,7 @@ ipcMain.handle('update-fitting-payment', (_, data) => {
                 const cid = cashier ? cashier.id : null;
 
                 const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, type)
+                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(ref, data.amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'layaway');
 
@@ -329,11 +437,11 @@ ipcMain.handle('delete-production-log', (_, id) => {
 });
 
 // workforce payments
-ipcMain.handle('get-workforce-payments', () => db.prepare('SELECT * FROM workforce_payments ORDER BY date DESC').all());
+ipcMain.handle('get-workforce-payments', () => db.prepare('SELECT * FROM workforce_payments ORDER BY created_at DESC').all());
 ipcMain.handle('add-workforce-payment', (_, data) => {
     try {
-        db.prepare('INSERT INTO workforce_payments (worker_id, worker_name, amount, payment_mode, notes, date) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(data.worker_id, data.worker_name, data.amount, data.payment_mode, data.notes, data.date || new Date().toISOString());
+        db.prepare('INSERT INTO workforce_payments (worker_id, worker_name, amount, payment_mode, mpesa_code, notes) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(data.worker_id, data.worker_name, data.amount, data.payment_mode, data.mpesa_code || null, data.notes);
 
         // Also record as an expense automatically?
         // User said "payment should be records in admin panel".
@@ -349,36 +457,7 @@ ipcMain.handle('delete-workforce-payment', (_, id) => {
     } catch (e) { return { success: false, message: e.message }; }
 });
 
-// gallery
-ipcMain.handle('get-gallery', () => db.prepare('SELECT * FROM gallery ORDER BY created_at DESC').all());
 
-ipcMain.handle('add-gallery-item', (_, data) => {
-    try {
-        db.prepare('INSERT INTO gallery (title, description, image_data) VALUES (?, ?, ?)')
-            .run(data.title, data.description, data.image_data);
-        return { success: true };
-    } catch (e) { return { success: false, message: e.message }; }
-});
-
-ipcMain.handle('update-gallery-item', (_, data) => {
-    try {
-        if (data.image_data) {
-            db.prepare('UPDATE gallery SET title = ?, description = ?, image_data = ? WHERE id = ?')
-                .run(data.title, data.description, data.image_data, data.id);
-        } else {
-            db.prepare('UPDATE gallery SET title = ?, description = ? WHERE id = ?')
-                .run(data.title, data.description, data.id);
-        }
-        return { success: true };
-    } catch (e) { return { success: false, message: e.message }; }
-});
-
-ipcMain.handle('delete-gallery-item', (_, id) => {
-    try {
-        db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
-        return { success: true };
-    } catch (e) { return { success: false, message: e.message }; }
-});
 
 // tailoring orders
 ipcMain.handle('get-tailoring-orders', () => {
@@ -396,66 +475,56 @@ ipcMain.handle('get-tailoring-orders', () => {
 
 ipcMain.handle('add-tailoring-order', (_, data) => {
     try {
+        console.log('=== Attempting to Save Tailoring Order ===');
         const code = 'ORD-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+        
+        const styleId = (data.style_id && data.style_id !== '') ? parseInt(data.style_id) : null;
+        const materialId = (data.material_id && data.material_id !== '') ? parseInt(data.material_id) : null;
 
-        // Convert empty strings to null for foreign keys
-        const styleId = data.style_id && data.style_id !== '' ? parseInt(data.style_id) : null;
-        const materialId = data.material_id && data.material_id !== '' ? parseInt(data.material_id) : null;
-
-        console.log('=== Creating Tailoring Order ===');
-        console.log('Order Code:', code);
-        console.log('Customer:', data.customer_name, data.customer_phone);
-        console.log('Style ID:', styleId, '(', styleId === null ? 'Custom Design' : 'Gallery Reference', ')');
-        console.log('Material ID:', materialId, '(', materialId === null ? 'Customer Provided' : 'From Inventory', ')');
-        console.log('Measurements:', data.measurements);
-        console.log('Price:', data.total_price, '| Deposit:', data.paid_amount, '| Deadline:', data.deadline);
-
-        const trans = db.transaction(() => {
+        const trans = db.transaction((data, code, styleId, materialId) => {
+            // 1. Insert Order
             db.prepare(`
                 INSERT INTO tailoring_orders (order_code, customer_name, customer_phone, style_id, material_id, measurements, total_price, paid_amount, deadline)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(code, data.customer_name, data.customer_phone, styleId, materialId, JSON.stringify(data.measurements), data.total_price, data.paid_amount, data.deadline);
 
-            console.log('✅ Tailoring order saved to database');
+            console.log('  -> Order record created:', code);
 
+            // 2. Record Sale if deposit paid
             if (data.paid_amount > 0) {
                 const cashier = data.cashier_id ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.cashier_id) : null;
                 const cid = cashier ? cashier.id : null;
 
                 const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, type)
+                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(code, data.paid_amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'tailoring');
 
                 const saleId = resSale.lastInsertRowid;
-                const tailorItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
-
+                
+                // Get or Create System Item
+                let tailorItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
                 if (!tailorItem) {
-                    console.error('❌ SYSTEM_TAILORING item missing from database!');
-                    // Create it on the fly if missing (fallback)
-                    db.prepare('INSERT INTO items (code, item_code, item_name, price, stock, min_stock) VALUES (?, ?, ?, ?, ?, ?)')
-                        .run('SYSTEM_TAILORING', 'TAILOR', 'Tailoring Revenue', 0, 999999, 0);
-                    const newItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
-                    var tId = newItem.id;
-                } else {
-                    var tId = tailorItem.id;
+                    const resNew = db.prepare('INSERT INTO items (item_name, item_code, code, price, stock, category) VALUES (?, ?, ?, ?, ?, ?)')
+                        .run('Tailoring Revenue', 'TAILOR', 'SYSTEM_TAILORING', 0, 999999, 'Services');
+                    tailorItem = { id: resNew.lastInsertRowid };
                 }
-
-                console.log('Recording sale item with SaleID:', saleId, 'ItemID:', tId);
 
                 db.prepare(`
                     INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(saleId, tId, `[Tailoring Deposit] ${data.customer_name}`, code, 1, data.paid_amount, data.paid_amount);
-
-                console.log('✅ Payment recorded in sales');
+                `).run(saleId, tailorItem.id, `[Tailoring Deposit] ${data.customer_name}`, code, 1, data.paid_amount, data.paid_amount);
+                
+                console.log('  -> Financial record created. Sale ID:', saleId);
             }
+            return code;
         });
-        trans();
-        console.log('✅ Transaction committed successfully\n');
-        return { success: true, code };
+
+        const result = trans(data, code, styleId, materialId);
+        console.log('=== Order Saved Successfully ===\n');
+        return { success: true, code: result };
     } catch (e) {
-        console.error('❌ Error creating tailoring order:', e.message);
+        console.error('❌ TAILORING ERROR:', e.message);
         return { success: false, message: e.message };
     }
 });
@@ -478,7 +547,7 @@ ipcMain.handle('update-tailoring-payment', (_, data) => {
                 const cid = cashier ? cashier.id : null;
 
                 const resSale = db.prepare(`
-                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, type)
+                    INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(ref, data.amount, data.cashier_name || 'N/A', cid, data.payment_mode || 'Cash', data.mpesa_code || null, 'tailoring');
 
@@ -487,8 +556,8 @@ ipcMain.handle('update-tailoring-payment', (_, data) => {
 
                 if (!tailorItem) {
                     console.error('❌ SYSTEM_TAILORING item missing from database!');
-                    db.prepare('INSERT INTO items (code, item_code, item_name, price, stock, min_stock) VALUES (?, ?, ?, ?, ?, ?)')
-                        .run('SYSTEM_TAILORING', 'TAILOR', 'Tailoring Revenue', 0, 999999, 0);
+                    db.prepare('INSERT INTO items (item_name, item_code, code, price, stock, category) VALUES (?, ?, ?, ?, ?, ?)')
+                        .run('Tailoring Revenue', 'TAILOR', 'SYSTEM_TAILORING', 0, 999999, 'Services');
                     const newItem = db.prepare('SELECT id FROM items WHERE code = ?').get('SYSTEM_TAILORING');
                     var tId = newItem.id;
                 } else {
@@ -551,8 +620,14 @@ ipcMain.handle('process-sale', (_, saleData) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
+        const updStock = db.prepare(`
+            UPDATE items SET stock = stock - ? WHERE id = ? AND code NOT LIKE 'SYSTEM_%'
+        `);
+
         for (const it of data.items) {
             ins.run(saleId, it.id, it.name, it.code || 'N/A', it.qty, it.price, it.qty * it.price, it.material || null, it.colorCode || null);
+            // Only update stock for physical items, skip system items
+            updStock.run(it.qty, it.id);
         }
         return ref;
     });
@@ -569,7 +644,7 @@ ipcMain.handle('get-sales', () => db.prepare(`
     SELECT s.*, 
     EXISTS(SELECT 1 FROM sale_items WHERE sale_id = s.id AND (material IS NOT NULL OR color_code IS NOT NULL)) as is_custom
     FROM sales s
-    ORDER BY date DESC
+    ORDER BY created_at DESC
 `).all());
 ipcMain.handle('get-sale-items', (_, saleId) => db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(saleId));
 
@@ -597,36 +672,47 @@ ipcMain.handle('upsert-user', (_, u) => {
 
 // Reports
 ipcMain.handle('get-sales-reports', (_, range) => {
-    let filter = "1=1";
-    if (range === 'daily') filter = "date(date) = date('now')";
-    else if (range === 'weekly') filter = "date >= date('now', '-7 days')";
-    else if (range === 'monthly') filter = "date >= date('now', 'start of month')";
-    else if (range === 'yearly') filter = "date >= date('now', 'start of year')";
+    try {
+        let filter = "1=1";
+        if (range === 'daily') filter = "date(created_at, 'localtime') = date('now', 'localtime')";
+        else if (range === 'weekly') filter = "date(created_at, 'localtime') >= date('now', 'localtime', '-7 days')";
+        else if (range === 'monthly') filter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of month')";
+        else if (range === 'yearly') filter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of year')";
 
-    const summary = db.prepare(`SELECT count(*) as count, coalesce(sum(total_amount), 0) as total FROM sales WHERE ${filter}`).get();
-    const modes = db.prepare(`SELECT payment_mode, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY payment_mode`).all();
-    const items = db.prepare(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${filter} GROUP BY item_id ORDER BY qty DESC`).all();
+        console.log(`--- Generating Reports (Range: ${range}) ---`);
+        const summary = db.prepare(`SELECT count(*) as count, coalesce(sum(total_amount), 0) as total FROM sales WHERE ${filter}`).get();
+        const modes = db.prepare(`SELECT payment_mode, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY payment_mode`).all();
+        
+        // Use a more specific filter for joined queries to avoid ambiguity
+        const joinFilter = filter.replace(/created_at/g, 'sales.created_at');
+        console.log('--- Running Items Query with filter:', joinFilter);
+        const items = db.prepare(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${joinFilter} GROUP BY item_name ORDER BY qty DESC LIMIT 10`).all();
+        const salesByType = db.prepare(`SELECT sale_type, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY sale_type`).all();
 
-    // Expenses reporting
-    let expFilter = "1=1";
-    if (range === 'daily') expFilter = "date(created_at) = date('now')";
-    else if (range === 'weekly') expFilter = "date(created_at) >= date('now', '-7 days')";
-    else if (range === 'monthly') expFilter = "date(created_at) >= date('now', 'start of month')";
-    else if (range === 'yearly') expFilter = "date(created_at) >= date('now', 'start of year')";
+        // Expenses reporting
+        let expFilter = "1=1";
+        if (range === 'daily') expFilter = "date(created_at, 'localtime') = date('now', 'localtime')";
+        else if (range === 'weekly') expFilter = "date(created_at, 'localtime') >= date('now', 'localtime', '-7 days')";
+        else if (range === 'monthly') expFilter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of month')";
+        else if (range === 'yearly') expFilter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of year')";
 
-    const expensesSummary = db.prepare(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM expenses WHERE ${expFilter}`).get();
-    const expensesByCategory = db.prepare(`SELECT category, sum(amount) as total, count(*) as count FROM expenses WHERE ${expFilter} GROUP BY category`).all();
+        const expensesSummary = db.prepare(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM expenses WHERE ${expFilter}`).get();
+        const expensesByCategory = db.prepare(`SELECT category, sum(amount) as total, count(*) as count FROM expenses WHERE ${expFilter} GROUP BY category`).all();
 
-    // Workforce Payments reporting
-    let wfFilter = "1=1";
-    if (range === 'daily') wfFilter = "date(date) = date('now')";
-    else if (range === 'weekly') wfFilter = "date >= date('now', '-7 days')";
-    else if (range === 'monthly') wfFilter = "date >= date('now', 'start of month')";
-    else if (range === 'yearly') wfFilter = "date >= date('now', 'start of year')";
+        // Workforce Payments reporting
+        let wfFilter = "1=1";
+        if (range === 'daily') wfFilter = "date(created_at, 'localtime') = date('now', 'localtime')";
+        else if (range === 'weekly') wfFilter = "date(created_at, 'localtime') >= date('now', 'localtime', '-7 days')";
+        else if (range === 'monthly') wfFilter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of month')";
+        else if (range === 'yearly') wfFilter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of year')";
 
-    const workforceSummary = db.prepare(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM workforce_payments WHERE ${wfFilter}`).get();
+        const workforceSummary = db.prepare(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM workforce_payments WHERE ${wfFilter}`).get();
 
-    return { summary, modes, items, expensesSummary, expensesByCategory, workforceSummary };
+        return { summary, modes, items, salesByType, expensesSummary, expensesByCategory, workforceSummary };
+    } catch (err) {
+        console.error('Report Generation Error:', err);
+        return { error: err.message };
+    }
 });
 
 // Expenses
@@ -731,7 +817,15 @@ ipcMain.handle('get-printers', async (event) => {
 ipcMain.handle('print', async (_, html) => {
     let printWin = null;
     try {
-        printWin = new BrowserWindow({ show: false, width: 800, height: 600, webPreferences: { nodeIntegration: true } });
+        printWin = new BrowserWindow({ 
+            show: false, 
+            width: 800, 
+            height: 600, 
+            webPreferences: { 
+                nodeIntegration: false,
+                contextIsolation: true
+            } 
+        });
         await printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 
         // Check if a specific printer is configured

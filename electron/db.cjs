@@ -8,12 +8,22 @@ const dbPath = !app.isPackaged
   : path.join(app.getPath('userData'), 'pos.db');
 
 const db = new Database(dbPath);
+db.pragma('foreign_keys = ON');
 
 function initDb() {
   console.log('Initializing database at:', dbPath);
 
   // --- MIGRATIONS ---
   const tableExists = (name) => db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+
+  // Migration: gallery table category column
+  if (tableExists('gallery')) {
+    const columns = db.prepare("PRAGMA table_info(gallery)").all();
+    if (!columns.find(c => c.name === 'category')) {
+      console.log('Migrating gallery: adding category column');
+      db.prepare("ALTER TABLE gallery ADD COLUMN category TEXT").run();
+    }
+  }
 
   // Migration: items table (rename name to item_name if it exists)
   if (tableExists('items')) {
@@ -59,6 +69,7 @@ function initDb() {
       price REAL NOT NULL,
       stock INTEGER DEFAULT 0,
       min_stock INTEGER DEFAULT 5,
+      category TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -79,11 +90,12 @@ function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ref_number TEXT UNIQUE NOT NULL,
       total_amount REAL NOT NULL,
-      date DATETIME DEFAULT CURRENT_TIMESTAMP,
       cashier_name TEXT,
+      cashier_id INTEGER,
       payment_mode TEXT DEFAULT 'Cash',
       mpesa_code TEXT,
-      cashier_id INTEGER,
+      sale_type TEXT DEFAULT 'pos',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(cashier_id) REFERENCES users(id)
     );
 
@@ -161,18 +173,11 @@ function initDb() {
       amount REAL NOT NULL,
       payment_mode TEXT DEFAULT 'Cash',
       notes TEXT,
-      date DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(worker_id) REFERENCES workforce(id)
     );
 
-    CREATE TABLE IF NOT EXISTS gallery (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT,
-      description TEXT,
-      image_data TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+
 
     CREATE TABLE IF NOT EXISTS tailoring_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,16 +211,29 @@ function initDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+    CREATE TABLE IF NOT EXISTS gallery (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      image_data TEXT,
+      category TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // --- COLUMN MIGRATIONS ---
   const addCol = (tbl, col, def) => {
     try {
       db.prepare(`ALTER TABLE ${tbl} ADD COLUMN ${col} ${def}`).run();
-    } catch (e) { }
+      console.log(`✅ Migration: Added ${col} to ${tbl}`);
+    } catch (e) {
+      if (!e.message.includes('duplicate column name')) {
+        console.error(`❌ Migration failed for ${tbl}.${col}:`, e.message);
+      }
+    }
   };
 
   addCol('users', 'full_name', 'TEXT');
+  console.log('--- Sales Table Columns ---', db.prepare("PRAGMA table_info(sales)").all().map(c => c.name));
   addCol('users', 'status', "TEXT DEFAULT 'active'");
   addCol('items', 'code', 'TEXT');
   addCol('items', 'item_code', 'TEXT');
@@ -223,17 +241,35 @@ function initDb() {
   addCol('items', 'price', 'REAL');
   addCol('items', 'stock', 'INTEGER');
   addCol('items', 'min_stock', 'INTEGER DEFAULT 5');
+  const salesCols = db.prepare("PRAGMA table_info(sales)").all();
+  if (!salesCols.find(c => c.name === 'created_at')) {
+    console.log('Migrating sales: adding created_at column');
+    addCol('sales', 'created_at', 'DATETIME'); // Cannot use CURRENT_TIMESTAMP in ALTER TABLE
+    
+    // If there's an old 'date' column, migrate data
+    if (salesCols.find(c => c.name === 'date')) {
+        console.log('Migrating data from date to created_at');
+        db.prepare("UPDATE sales SET created_at = date").run();
+    }
+  }
+  
   addCol('sales', 'payment_mode', "TEXT DEFAULT 'Cash'");
   addCol('sales', 'mpesa_code', 'TEXT');
   addCol('sales', 'cashier_id', 'INTEGER');
-  addCol('sales', 'type', "TEXT DEFAULT 'pos'");
+  addCol('sales', 'sale_type', "TEXT DEFAULT 'pos'");
+  addCol('workforce_payments', 'created_at', 'DATETIME'); // Cannot use CURRENT_TIMESTAMP in ALTER TABLE
+  addCol('items', 'category', 'TEXT');
   addCol('sale_items', 'item_code', 'TEXT');
   addCol('sale_items', 'material', 'TEXT');
   addCol('sale_items', 'color_code', 'TEXT');
   addCol('services', 'mpesa_code', 'TEXT');
   addCol('fitting_deposits', 'customer_phone', 'TEXT');
+  addCol('fitting_deposits', 'payment_mode', "TEXT DEFAULT 'Cash'");
+  addCol('fitting_deposits', 'mpesa_code', 'TEXT');
   addCol('tailoring_orders', 'status', "TEXT DEFAULT 'pending'");
   addCol('expenses', 'mpesa_code', 'TEXT');
+  addCol('workforce_payments', 'mpesa_code', 'TEXT');
+
 
   // --- SEEDING ---
   const checkServiceItem = db.prepare('SELECT * FROM items WHERE code = ?').get('SYSTEM_SERVICE');
@@ -301,6 +337,7 @@ function initDb() {
   } catch (err) {
     console.error('Data cleanup error:', err.message);
   }
+  console.log('--- Database Initialization Complete ---');
 }
 
 module.exports = { db, initDb, dbPath };

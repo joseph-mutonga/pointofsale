@@ -1,15 +1,19 @@
 import { useState, useMemo } from 'react';
 
 export default function TailoringView({
-    user, tailoringOrders, gallery, materials, loadData, onBack,
+    user, tailoringOrders, materials, gallery, loadData, onBack,
     printTailoringReceipt,
-    printTailoringSpecs
+    printTailoringSpecs,
+    showToast,
+    processing,
+    setProcessing
 }) {
     const [garmentType, setGarmentType] = useState('shirt');
     const [orderSearch, setOrderSearch] = useState('');
     const [tailoringPayment, setTailoringPayment] = useState(null);
     const [tailoringOrderToView, setTailoringOrderToView] = useState(null);
-    const [previewImage, setPreviewImage] = useState(null);
+    const [selectedStyle, setSelectedStyle] = useState(null);
+    const [showGalleryModal, setShowGalleryModal] = useState(false);
 
     const filteredTailoring = useMemo(() => {
         const term = orderSearch.toLowerCase();
@@ -51,7 +55,7 @@ export default function TailoringView({
         const data = {
             customer_name: fd.get('customer_name'),
             customer_phone: fd.get('customer_phone'),
-            style_id: fd.get('style_id') || null,
+            style_id: selectedStyle?.id || null,
             material_id: fd.get('material_id') || null,
             measurements,
             total_price: Number(fd.get('total_price')),
@@ -63,15 +67,24 @@ export default function TailoringView({
             cashier_id: user.id
         };
 
-        const res = await window.api.addTailoringOrder(data);
-        if (res.success) {
-            alert(`Tailoring Order Created.Code: ${res.code} `);
-            const style = gallery.find(g => g.id == data.style_id);
-            const material = materials.find(m => m.id == data.material_id);
-            printTailoringReceipt({ ...data, order_code: res.code, style_name: style?.title, material_name: material?.name }, data.paid_amount);
-            e.target.reset();
-            loadData();
-        } else alert(res.message);
+        setProcessing(true);
+        try {
+            const res = await window.api.addTailoringOrder(data);
+            if (res.success) {
+                const material = materials.find(m => m.id == data.material_id);
+
+                if (showToast) showToast(`Order Created (${res.code})! Printing Receipt...`, 'success');
+                await printTailoringReceipt({ ...data, order_code: res.code, material_name: material?.name }, data.paid_amount);
+
+                e.target.reset();
+                setSelectedStyle(null);
+                await loadData();
+            } else {
+                if (showToast) showToast(res.message, 'error');
+            }
+        } finally {
+            setProcessing(false);
+        }
     };
 
     const handlePayOrder = (ord) => {
@@ -87,24 +100,40 @@ export default function TailoringView({
         const pMode = e.target.payment_mode.value;
         const mCode = e.target.mpesa_code?.value || '';
 
-        const res = await window.api.updateTailoringPayment({
-            id: ord.id,
-            amount: numericAmount,
-            payment_mode: pMode,
-            mpesa_code: mCode,
-            cashier_name: user.full_name,
-            cashier_id: user.id
-        });
+        setProcessing(true);
+        try {
+            const res = await window.api.updateTailoringPayment({
+                id: ord.id,
+                amount: numericAmount,
+                payment_mode: pMode,
+                mpesa_code: mCode,
+                cashier_name: user.full_name,
+                cashier_id: user.id
+            });
 
-        if (res.success) {
-            printTailoringReceipt({ ...ord, paid_amount: ord.paid_amount + numericAmount }, numericAmount);
-            setTailoringPayment(null);
-            loadData();
-        } else alert(res.message);
+            if (res.success) {
+                const newCumulativePaid = Number(ord.paid_amount) + numericAmount;
+                if (showToast) showToast('Payment Processed! Printing Receipt...', 'success');
+                await printTailoringReceipt({ ...ord, paid_amount: newCumulativePaid }, numericAmount);
+
+                setTailoringPayment(null);
+                await loadData();
+            } else {
+                if (showToast) showToast(res.message, 'error');
+            }
+        } finally {
+            setProcessing(false);
+        }
     };
 
     return (
         <div className="app">
+            {processing && (
+                <div className="processing-overlay" style={{ zIndex: 99999 }}>
+                    <div className="spinner"></div>
+                    <div style={{ fontWeight: 'bold', fontSize: '1.2rem', color: 'white' }}>Processing Order...</div>
+                </div>
+            )}
             <header className="header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <button className="btn-back-nav" onClick={onBack}>← Dashboard</button>
@@ -128,18 +157,32 @@ export default function TailoringView({
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                                 <div className="form-group">
-                                    <label className="label">Style Reference</label>
-                                    <select name="style_id" className="input" style={{ width: '100%' }}>
-                                        <option value="">-- Custom Design --</option>
-                                        {gallery.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
-                                    </select>
-                                </div>
-                                <div className="form-group">
                                     <label className="label">Fabric / Material</label>
                                     <select name="material_id" className="input" style={{ width: '100%' }}>
                                         <option value="">-- Customer Provided --</option>
                                         {materials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                                     </select>
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Design Style</label>
+                                    <button type="button" className="btn" style={{ 
+                                        width: '100%', 
+                                        background: selectedStyle ? 'rgba(0, 242, 255, 0.1)' : 'rgba(255,255,255,0.05)',
+                                        border: selectedStyle ? '1px solid #00f2ff' : '1px solid rgba(255,255,255,0.1)',
+                                        color: selectedStyle ? '#00f2ff' : '#94a3b8',
+                                        height: '42px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px'
+                                    }} onClick={() => setShowGalleryModal(true)}>
+                                        {selectedStyle ? (
+                                            <>
+                                                <img src={selectedStyle.image_data} style={{ width: '24px', height: '24px', borderRadius: '4px', objectFit: 'cover' }} />
+                                                <span style={{ maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedStyle.title}</span>
+                                            </>
+                                        ) : 'Pick Style'}
+                                    </button>
                                 </div>
                             </div>
 
@@ -288,7 +331,6 @@ export default function TailoringView({
                                                     return <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>{m.type || 'Custom'}</div>;
                                                 } catch (e) { return null; }
                                             })()}
-                                            <div style={{ fontSize: '0.8rem' }}>Style: <span style={{ color: '#00f2ff' }}>{o.style_name || 'Custom'}</span></div>
                                             <div style={{ fontSize: '0.8rem' }}>Fabric: {o.material_name || 'Provided'}</div>
                                         </td>
                                         <td>
@@ -392,21 +434,7 @@ export default function TailoringView({
                             </div>
 
                             <div style={{ background: 'rgba(255,255,255,0.05)', padding: '20px', borderRadius: '12px', marginBottom: '24px' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                                        {tailoringOrderToView.style_image && (
-                                            <img
-                                                src={tailoringOrderToView.style_image}
-                                                alt="Style Ref"
-                                                onClick={() => setPreviewImage(tailoringOrderToView.style_image)}
-                                                style={{ width: '60px', height: '60px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #334155', cursor: 'zoom-in' }}
-                                            />
-                                        )}
-                                        <div>
-                                            <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '4px' }}>Style Reference</div>
-                                            <div style={{ fontWeight: '600' }}>{tailoringOrderToView.style_name || 'Custom Design'}</div>
-                                        </div>
-                                    </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
                                     <div>
                                         <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '4px' }}>Material Selected</div>
                                         <div style={{ fontWeight: '600' }}>{tailoringOrderToView.material_name || 'Customer Provided'}</div>
@@ -443,34 +471,105 @@ export default function TailoringView({
                         </div>
                         <div className="card-footer" style={{ padding: '20px', borderTop: '1px solid #334155', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                             <button
-                                className="btn btn-primary"
+                                className="btn"
+                                style={{ background: '#3b82f6', color: 'white' }}
+                                onClick={() => printTailoringReceipt(tailoringOrderToView, 0)}
+                            >
+                                📄 Print Receipt
+                            </button>
+                            <button
+                                className="btn"
                                 style={{ background: '#10b981', color: 'white' }}
                                 onClick={() => printTailoringSpecs(tailoringOrderToView)}
                             >
-                                🖨️ Print Measurements
+                                📏 Print Measurements
                             </button>
-                            <button className="btn btn-primary" onClick={() => setTailoringOrderToView(null)}>Close Details</button>
+                            <button className="btn" style={{ background: 'rgba(255,255,255,0.1)' }} onClick={() => setTailoringOrderToView(null)}>Close</button>
                         </div>
                     </div>
                 </div>
             )}
-
-            {previewImage && (
-                <div
-                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, backdropFilter: 'blur(10px)' }}
-                    onClick={() => setPreviewImage(null)}
-                >
-                    <img
-                        src={previewImage}
-                        alt="Preview"
-                        style={{ maxWidth: '85%', maxHeight: '85%', borderRadius: '12px', boxShadow: '0 0 50px rgba(0,0,0,0.8)' }}
-                    />
-                    <button
-                        style={{ position: 'absolute', top: '30px', right: '30px', background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '1.5rem', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(10px)' }}
-                        onClick={() => setPreviewImage(null)}
-                    >
-                        ×
-                    </button>
+            {showGalleryModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.9)', backdropFilter: 'blur(20px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100000 }}>
+                    <div className="card" style={{ 
+                        width: '90%', 
+                        maxWidth: '1100px', 
+                        maxHeight: '85vh', 
+                        overflow: 'hidden', 
+                        display: 'flex', 
+                        flexDirection: 'column',
+                        background: '#1e293b',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '24px',
+                        boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+                    }}>
+                        <div className="card-header" style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center',
+                            padding: '24px 32px',
+                            borderBottom: '1px solid rgba(255,255,255,0.05)'
+                        }}>
+                            <span style={{ fontSize: '1.25rem', fontWeight: '600', letterSpacing: '0.5px' }}>SELECT REFERENCE STYLE</span>
+                            <button className="btn" style={{ background: 'rgba(255,255,255,0.05)', borderRadius: '50%', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }} onClick={() => setShowGalleryModal(false)}>✕</button>
+                        </div>
+                        <div className="card-body" style={{ overflowY: 'auto', padding: '32px' }}>
+                            <div style={{ 
+                                display: 'grid', 
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', 
+                                gap: '24px' 
+                            }}>
+                                <div 
+                                    className="gallery-item-select" 
+                                    style={{ 
+                                        border: !selectedStyle ? '2px solid #00f2ff' : '1px solid rgba(255,255,255,0.05)', 
+                                        borderRadius: '16px', 
+                                        padding: '24px', 
+                                        textAlign: 'center', 
+                                        cursor: 'pointer',
+                                        background: !selectedStyle ? 'rgba(0, 242, 255, 0.05)' : 'rgba(255,255,255,0.02)',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onClick={() => { setSelectedStyle(null); setShowGalleryModal(false); }}
+                                >
+                                    <div style={{ fontSize: '2.5rem', marginBottom: '16px' }}>✂️</div>
+                                    <div style={{ fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>Custom Design</div>
+                                    <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>No reference photo</div>
+                                </div>
+                                {gallery.map(item => (
+                                    <div 
+                                        key={item.id} 
+                                        className="gallery-item-select" 
+                                        style={{ 
+                                            border: selectedStyle?.id === item.id ? '2px solid #00f2ff' : '1px solid rgba(255,255,255,0.05)', 
+                                            borderRadius: '16px', 
+                                            overflow: 'hidden',
+                                            cursor: 'pointer',
+                                            background: selectedStyle?.id === item.id ? 'rgba(0, 242, 255, 0.05)' : 'rgba(255,255,255,0.02)',
+                                            transition: 'all 0.2s',
+                                            display: 'flex',
+                                            flexDirection: 'column'
+                                        }}
+                                        onClick={() => { setSelectedStyle(item); setShowGalleryModal(false); }}
+                                    >
+                                        <div style={{ position: 'relative', width: '100%', paddingBottom: '66.6%' }}>
+                                            <img src={item.image_data} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                                        </div>
+                                        <div style={{ padding: '12px 16px' }}>
+                                            <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#fff', marginBottom: '2px' }}>{item.title}</div>
+                                            <div style={{ fontSize: '0.7rem', color: '#00f2ff', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{item.category}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <style>{`
+                        .gallery-item-select:hover {
+                            border-color: rgba(0, 242, 255, 0.5) !important;
+                            transform: translateY(-4px);
+                        }
+                    `}</style>
                 </div>
             )}
         </div>

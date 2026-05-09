@@ -1,14 +1,19 @@
 import { useState, useEffect, useMemo } from 'react';
 import AdminPanel from './AdminPanel';
-import GalleryView from './views/GalleryView';
 import TailoringView from './views/TailoringView';
+import GalleryView from './views/GalleryView';
 import './hub.css';
 import logo from './assets/logo.png';
 
 function App() {
     const [user, setUser] = useState(() => {
-        const saved = localStorage.getItem('pos_user');
-        return saved ? JSON.parse(saved) : null;
+        try {
+            const saved = localStorage.getItem('pos_user');
+            return saved ? JSON.parse(saved) : null;
+        } catch (e) {
+            console.error('Failed to parse user session:', e);
+            return null;
+        }
     });
     const [view, setView] = useState(() => {
         return localStorage.getItem('pos_view') || 'hub';
@@ -31,8 +36,9 @@ function App() {
     const [serviceSearch, setServiceSearch] = useState('');
     const [fittingDeposits, setFittingDeposits] = useState([]);
     const [fittingSearch, setFittingSearch] = useState('');
-    const [gallery, setGallery] = useState([]);
+
     const [tailoringOrders, setTailoringOrders] = useState([]);
+    const [gallery, setGallery] = useState([]);
 
     const [servicePayment, setServicePayment] = useState(null);
     const [fittingPayment, setFittingPayment] = useState(null);
@@ -42,6 +48,15 @@ function App() {
 
     const [settings, setSettings] = useState({});
     const [toast, setToast] = useState(null);
+    const [processing, setProcessing] = useState(false);
+    const [base64Logo, setBase64Logo] = useState(logo);
+
+    useEffect(() => {
+        // Load high-reliability base64 logo for printing in production
+        window.api.getAppLogo().then(b64 => {
+            if (b64) setBase64Logo(b64);
+        });
+    }, []);
 
     const showToast = (message, type = 'info') => {
         setToast({ message, type });
@@ -71,24 +86,29 @@ function App() {
     }, [user, showAdmin]);
 
     const loadData = async () => {
-        const all = await window.api.getAllItems();
-        setItems(all);
-        const mats = await window.api.getMaterials();
-        setMaterials(mats || []);
-        const cols = await window.api.getColors();
-        setColors(cols || []);
-        const srvs = await window.api.getServices();
-        setServices(srvs || []);
-        const fits = await window.api.getFittingDeposits();
-        setFittingDeposits(fits || []);
-        const gal = await window.api.getGallery();
-        setGallery(gal || []);
-        const tords = await window.api.getTailoringOrders();
-        setTailoringOrders(tords || []);
-        const exps = await window.api.getExpenses();
-        setExpenses(exps || []);
-        const sets = await window.api.getSettings();
-        setSettings(sets || {});
+        try {
+            const all = await window.api.getAllItems();
+            setItems(all);
+            const mats = await window.api.getMaterials();
+            setMaterials(mats || []);
+            const cols = await window.api.getColors();
+            setColors(cols || []);
+            const srvs = await window.api.getServices();
+            setServices(srvs || []);
+            const fits = await window.api.getFittingDeposits();
+            setFittingDeposits(fits || []);
+
+            const tords = await window.api.getTailoringOrders();
+            setTailoringOrders(tords || []);
+            const gall = await window.api.getGallery();
+            setGallery(gall || []);
+            const exps = await window.api.getExpenses();
+            setExpenses(exps || []);
+            const sets = await window.api.getSettings();
+            setSettings(sets || {});
+        } catch (e) {
+            console.error('Data load error:', e);
+        }
     };
 
     const handleKeypad = (val) => {
@@ -106,12 +126,12 @@ function App() {
     const addToCart = async () => {
         const numericQty = Number(qty);
         const it = items.find(i => (i.item_code || i.code) === code);
-        if (!it) return alert('Product not found');
-        if (numericQty <= 0) return alert('Invalid quantity');
+        if (!it) return showToast('Product not found', 'error');
+        if (numericQty <= 0) return showToast('Invalid quantity', 'error');
 
         if (view === 'selling_materials') {
-            if (!selectedMaterial) return alert('Please select a material');
-            if (!selectedColor) return alert('Please select a color code');
+            if (!selectedMaterial) return showToast('Please select a material', 'error');
+            if (!selectedColor) return showToast('Please select a color code', 'error');
         }
 
         const exist = cart.find(x => x.id === it.id && x.material === selectedMaterial && x.colorCode === selectedColor);
@@ -170,23 +190,29 @@ function App() {
         if (cart.length === 0) return;
         if (paymentMode === 'M-Pesa' && !mpesaCode) return showToast('M-Pesa Code required', 'error');
 
-        const res = await window.api.processSale({
-            items: cart,
-            total,
-            cashier: user.full_name || user.username,
-            cashierId: user.id,
-            paymentMode,
-            mpesaCode
-        });
+        setProcessing(true);
+        try {
+            const saleData = {
+                items: cart,
+                total,
+                cashier: user.full_name || user.username,
+                cashierId: user.id,
+                paymentMode,
+                mpesaCode
+            };
+            const res = await window.api.processSale(saleData);
 
-        if (res.success) {
-            showToast('Receipt is being printed...', 'info');
-            printReceipt(res.ref);
-            setCart([]);
-            setMpesaCode('');
-            setPaymentMode('Cash');
-            loadData();
-        } else showToast(res.message, 'error');
+            if (res.success) {
+                showToast('Receipt is being printed...', 'info');
+                await printReceipt(res.ref || res.ref_number || 'N/A');
+                setCart([]);
+                setMpesaCode('');
+                setPaymentMode('Cash');
+                await loadData();
+            } else showToast(res.message || 'Sale failed', 'error');
+        } finally {
+            setProcessing(false);
+        }
     };
 
     const printReceipt = (ref) => {
@@ -212,7 +238,7 @@ function App() {
         </head>
         <body>
           <div class="header-info">
-            <img src="${logo}" style="width: 50px; height: 50px; filter: grayscale(1); margin-bottom: 5px;" />
+            <img src="${base64Logo}" style="width: 50px; height: 50px; filter: grayscale(1); margin-bottom: 5px;" />
             <h2>${settings.shop_name || 'Eunika Collection'}</h2>
             <div class="info-text">
                 ${settings.shop_address || ''}<br/>
@@ -254,7 +280,7 @@ function App() {
         </body>
       </html>
     `;
-        window.api.print(html);
+        return window.api.print(html);
     };
 
     const printServiceReceipt = (srv, paidAmountThisTime) => {
@@ -266,7 +292,8 @@ function App() {
             body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
             .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
             h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
-            .label { font-size: 10px; font-weight: bold; margin-bottom: 10px; display: block; background: #000; color: #fff; padding: 2px; }
+            .info-text { font-size: 10px; color: #000; line-height: 1.2; }
+            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; background: #000; color: #fff; padding: 2px; text-transform: uppercase; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
             .total-section { border-top: 1px double #000; margin-top: 10px; padding-top: 5px; }
@@ -277,17 +304,21 @@ function App() {
         </head>
         <body>
           <div class="header-info">
+            <img src="${base64Logo}" style="width: 50px; height: 50px; filter: grayscale(1); margin-bottom: 5px;" />
             <h2>${settings.shop_name || 'Eunika Collection'}</h2>
-            <div style="font-size: 10px;">${settings.shop_phone || ''}</div>
-            <div class="label">SERVICE RECEIPT</div>
+            <div class="info-text">
+                ${settings.shop_address || ''}<br/>
+                TEL: ${settings.shop_phone || ''}<br/>
+            </div>
+            <div class="label-badge">SERVICE RECEIPT</div>
             <div style="font-size: 14px; font-weight: bold;">TICKET: ${srv.service_code || srv.code}</div>
           </div>
 
           <div class="details">
             <div class="row"><span>Customer:</span><span>${srv.customer_name}</span></div>
             <div class="row"><span>Item:</span><span>${srv.item_description}</span></div>
-            <div style="margin: 5px 0; border: 1px solid #eee; padding: 5px; font-size: 10px; font-style: italic;">
-                REPAIR: ${srv.service_required}
+            <div style="margin: 5px 0; border: 1px dashed #eee; padding: 5px; font-size: 10px; font-style: italic;">
+                SERVICE: ${srv.service_required}
             </div>
           </div>
 
@@ -306,12 +337,12 @@ function App() {
             <div>CASHIER: ${user.full_name}</div>
           </div>
           
-          <div class="footer">Please retain this ticket for collection.</div>
+          <div class="footer">Please retain this ticket for collection. ${settings.receipt_footer || ''}</div>
           <div class="meta">Software by Whose Folt</div>
         </body>
       </html>
     `;
-        window.api.print(html);
+        return window.api.print(html);
     };
 
     const printFittingReceipt = (fit, paidAmountThisTime) => {
@@ -323,18 +354,24 @@ function App() {
             body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
             .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
             h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
-            .label { font-size: 10px; font-weight: bold; margin-bottom: 10px; display: block; border: 1px solid #000; padding: 2px; }
+            .info-text { font-size: 10px; color: #000; line-height: 1.2; }
+            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; border: 1px solid #000; padding: 2px; text-transform: uppercase; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
             .total-section { border-top: 1px double #000; margin-top: 10px; padding-top: 5px; }
             .footer { margin-top: 20px; font-size: 9px; border-top: 1px solid #000; padding-top: 8px; }
+            .meta { font-size: 8px; margin-top: 5px; opacity: 0.7; }
           </style>
         </head>
         <body>
           <div class="header-info">
+            <img src="${base64Logo}" style="width: 50px; height: 50px; filter: grayscale(1); margin-bottom: 5px;" />
             <h2>${settings.shop_name || 'Eunika Collection'}</h2>
-            <div style="font-size: 10px;">${settings.shop_phone || ''}</div>
-            <div class="label">DEPOSIT/INSTALLMENT</div>
+            <div class="info-text">
+                ${settings.shop_address || ''}<br/>
+                TEL: ${settings.shop_phone || ''}<br/>
+            </div>
+            <div class="label-badge">DEPOSIT/INSTALLMENT</div>
             <div style="font-size: 14px; font-weight: bold;">PLAN: ${fit.fitting_code || fit.code}</div>
           </div>
 
@@ -360,13 +397,15 @@ function App() {
           </div>
 
           <div class="footer">${settings.receipt_footer || 'Thank you for your business!'}</div>
+          <div class="meta">Software by Whose Folt</div>
         </body>
       </html>
     `;
-        window.api.print(html);
+        return window.api.print(html);
     };
 
     const printTailoringReceipt = (ord, paidAmountThisTime) => {
+        if (!ord) return;
         const html = `
       <html>
         <head>
@@ -375,24 +414,30 @@ function App() {
             body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
             .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
             h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
-            .label { font-size: 10px; font-weight: bold; margin-bottom: 10px; display: block; background: #000; color: #fff; padding: 2px; }
+            .info-text { font-size: 10px; color: #000; line-height: 1.2; }
+            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; background: #000; color: #fff; padding: 2px; text-transform: uppercase; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
             .total-section { border-top: 1px double #000; margin-top: 10px; padding-top: 5px; }
             .footer { margin-top: 20px; font-size: 9px; border-top: 1px solid #000; padding-top: 8px; }
             .measurements { text-align: left; font-size: 9px; border: 1px dashed #aaa; padding: 5px; margin: 10px 0; }
+            .meta { font-size: 8px; margin-top: 5px; opacity: 0.7; }
           </style>
         </head>
         <body>
           <div class="header-info">
+            <img src="${base64Logo}" style="width: 50px; height: 50px; filter: grayscale(1); margin-bottom: 5px;" />
             <h2>${settings.shop_name || 'Eunika Collection'}</h2>
-            <div style="font-size: 10px;">${settings.shop_phone || ''}</div>
-            <div class="label">CUSTOM TAILORING</div>
-            <div style="font-size: 14px; font-weight: bold;">ORDER: ${ord.order_code || ord.code}</div>
+            <div class="info-text">
+                ${settings.shop_address || ''}<br/>
+                TEL: ${settings.shop_phone || ''}<br/>
+            </div>
+            <div class="label-badge">CUSTOM TAILORING</div>
+            <div style="font-size: 14px; font-weight: bold;">ORDER: ${ord.order_code || ord.code || 'N/A'}</div>
           </div>
 
           <div class="details">
-            <div class="row"><span>Customer:</span><span>${ord.customer_name}</span></div>
+            <div class="row"><span>Customer:</span><span>${ord.customer_name || 'Walking Customer'}</span></div>
             <div class="row"><span>Garments:</span><span style="font-weight: bold; text-transform: uppercase;">${(() => {
                 try {
                     const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
@@ -401,7 +446,7 @@ function App() {
             })()}</span></div>
             <div class="row"><span>Style:</span><span>${ord.style_name || 'Custom'}</span></div>
             <div class="row"><span>Fabric:</span><span>${ord.material_name || 'Own Material'}</span></div>
-            <div class="row"><span>DEADLINE:</span><span style="font-weight: bold;">${ord.deadline}</span></div>
+            <div class="row"><span>DEADLINE:</span><span style="font-weight: bold;">${ord.deadline || 'N/A'}</span></div>
           </div>
 
           <div class="measurements">
@@ -424,13 +469,13 @@ function App() {
           </div>
 
           <div class="details">
-            <div class="row"><span>Total Price:</span><span>Ksh ${Number(ord.total_price || ord.total_amount).toFixed(2)}</span></div>
-            <div class="row" style="font-weight: bold;"><span>PAID NOW:</span><span>Ksh ${Number(paidAmountThisTime).toFixed(2)}</span></div>
-            <div class="row"><span>Cumulative Paid:</span><span>Ksh ${Number(ord.paid_amount).toFixed(2)}</span></div>
+            <div class="row"><span>Total Price:</span><span>Ksh ${Number(ord.total_price || ord.total_amount || 0).toFixed(2)}</span></div>
+            <div class="row" style="font-weight: bold;"><span>PAID NOW:</span><span>Ksh ${Number(paidAmountThisTime || 0).toFixed(2)}</span></div>
+            <div class="row"><span>Cumulative Paid:</span><span>Ksh ${Number(ord.paid_amount || 0).toFixed(2)}</span></div>
           </div>
 
           <div class="total-section">
-            <div class="row" style="font-size: 15px; font-weight: bold;"><span>BALANCE:</span><span>Ksh ${(Number(ord.total_price || ord.total_amount) - Number(ord.paid_amount)).toFixed(2)}</span></div>
+            <div class="row" style="font-size: 15px; font-weight: bold;"><span>BALANCE:</span><span>Ksh ${(Number(ord.total_price || ord.total_amount || 0) - Number(ord.paid_amount || 0)).toFixed(2)}</span></div>
           </div>
 
           <div style="text-align: left; font-size: 9px; margin-top: 10px;">
@@ -439,10 +484,11 @@ function App() {
           </div>
 
           <div class="footer">${settings.receipt_footer || 'Expertise in every stitch.'}</div>
+          <div class="meta">Software by Whose Folt</div>
         </body>
       </html>
     `;
-        window.api.print(html);
+        return window.api.print(html);
     };
 
     const printTailoringSpecs = (ord) => {
@@ -451,65 +497,197 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 10mm; }
-            body { font-family: 'Arial', sans-serif; padding: 20px; text-align: left; }
-            .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; }
-            .order-info { margin-bottom: 20px; font-size: 1.2rem; }
-            .specs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; }
-            .spec-item { border-bottom: 1px solid #eee; padding: 5px 0; }
-            .label { font-weight: bold; color: #666; text-transform: uppercase; font-size: 0.8rem; }
-            .value { font-size: 1.1rem; font-weight: bold; }
-            .notes { background: #f9f9f9; padding: 15px; border-left: 4px solid #000; margin-top: 20px; }
-            .footer { margin-top: 50px; text-align: center; font-size: 0.8rem; color: #999; }
+            @page { margin: 0; }
+            body { 
+                font-family: 'Courier New', monospace; 
+                padding: 10px; 
+                text-align: center; 
+                width: 280px; 
+                margin: auto; 
+                font-size: 11px; 
+            }
+            .header { border-bottom: 2px solid #000; padding-bottom: 5px; margin-bottom: 10px; }
+            h2 { margin: 2px 0; text-transform: uppercase; font-size: 14px; }
+            .info { text-align: left; margin-bottom: 10px; font-size: 10px; }
+            .specs-title { 
+                background: #000; 
+                color: #fff; 
+                padding: 3px; 
+                margin: 10px 0; 
+                font-weight: bold; 
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            .spec-row { 
+                display: flex; 
+                justify-content: space-between; 
+                border-bottom: 1px dashed #ccc; 
+                padding: 4px 0;
+            }
+            .label { text-transform: capitalize; }
+            .value { font-weight: bold; font-size: 12px; }
+            .notes { 
+                text-align: left; 
+                margin-top: 15px; 
+                padding: 5px; 
+                border: 1px solid #000; 
+                font-style: italic;
+                font-size: 10px;
+            }
+            .footer { 
+                margin-top: 20px; 
+                font-size: 9px; 
+                border-top: 1px solid #000; 
+                padding-top: 5px; 
+                opacity: 0.8;
+            }
           </style>
         </head>
         <body>
           <div class="header">
             <h2>${settings.shop_name || 'Tailoring Workshop'}</h2>
-            <p>Order: <strong>${ord.order_code}</strong> | Date: ${new Date().toLocaleDateString()}</p>
+            <div style="font-size: 9px;">MEASUREMENT SPEC SHEET</div>
           </div>
           
-          <div class="order-info">
-            <div>Customer: <strong>${ord.customer_name}</strong></div>
-            <div>Item: <strong style="text-transform: uppercase;">${m.type || 'Custom'}</strong></div>
-            <div>Deadline: <strong>${ord.deadline}</strong></div>
+          <div class="info">
+            <div>ORDER: <strong>${ord.order_code}</strong></div>
+            <div>CUST : <strong>${ord.customer_name}</strong></div>
+            <div>ITEM : <strong style="text-transform: uppercase;">${m.type || 'Custom'}</strong></div>
+            <div>DATE : ${new Date().toLocaleDateString()}</div>
           </div>
 
-          <h3>MEASUREMENTS (Inches)</h3>
-          <div class="specs-grid">
+          <div class="specs-title">Measurements (Inches)</div>
+          
+          <div style="text-align: left;">
             ${Object.entries(m)
                 .filter(([k, v]) => k !== 'notes' && k !== 'type' && v)
                 .map(([k, v]) => `
-                <div class="spec-item">
-                    <div class="label">${k.replace(/_/g, ' ')}</div>
-                    <div class="value">${v}"</div>
+                <div class="spec-row">
+                    <span class="label">${k.replace(/_/g, ' ')}</span>
+                    <span class="value">${v}"</span>
                 </div>
                 `).join('')}
           </div>
 
-          ${m.notes ? `<div class="notes"><strong>NOTES:</strong><br/>${m.notes}</div>` : ''}
+          ${m.notes ? `<div class="notes"><strong>WORKSHOP NOTES:</strong><br/>${m.notes}</div>` : ''}
 
           <div class="footer">
-            Design: ${ord.style_name || 'Custom'} | Fabric: ${ord.material_name || 'Customer Supplied'}<br/>
-            Printed on ${new Date().toLocaleString()}
+            Style: ${ord.style_name || 'Custom'}<br/>
+            Fabric: ${ord.material_name || 'Customer Supplied'}<br/>
+            <div style="margin-top: 5px; font-weight: bold;">DEADLINE: ${ord.deadline}</div>
+            <div style="font-size: 8px; margin-top: 10px; opacity: 0.7;">Software by Whose Folt</div>
+            <div style="font-size: 7px; margin-top: 5px; opacity: 0.5;">Printed on ${new Date().toLocaleString()}</div>
           </div>
         </body>
       </html>
     `;
-        window.api.print(html);
+        return window.api.print(html);
+    };
+
+    const printExpenseReceipt = (exp) => {
+        const html = `
+      <html>
+        <head>
+          <style>
+            @page { margin: 0; }
+            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
+            .header-info { margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 8px; }
+            h2 { margin: 5px 0; font-size: 14px; }
+            .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+            .amount-box { border: 1.5px solid #000; padding: 10px; font-size: 16px; font-weight: bold; margin: 10px 0; }
+            .footer { margin-top: 15px; font-size: 8px; border-top: 1px solid #000; padding-top: 5px; }
+          </style>
+        </head>
+        <body>
+          <div class="header-info">
+            <h2>${settings.shop_name || 'Eunika Collection'}</h2>
+            <div style="font-weight: bold; border: 1px solid #000; padding: 2px;">EXPENSE VOUCHER</div>
+          </div>
+          <div class="details">
+            <div class="row"><span>Date:</span><span>${new Date().toLocaleString()}</span></div>
+            <div class="row"><span>Category:</span><span>${exp.category || 'N/A'}</span></div>
+            <div class="row"><span>Method:</span><span>${exp.payment_mode || 'Cash'}</span></div>
+          </div>
+          <div style="text-align: left; font-size: 11px; margin-bottom: 5px; font-weight: bold;">DESCRIPTION:</div>
+          <div style="text-align: left; font-size: 11px; margin-bottom: 10px; border: 1px dashed #ccc; padding: 5px;">
+            ${exp.description}
+          </div>
+          <div class="amount-box">
+            TOTAL: Ksh ${Number(exp.amount).toFixed(2)}
+          </div>
+          <div class="footer">
+            Internal Business Document<br/>
+            Software by Whose Folt
+          </div>
+        </body>
+      </html>
+    `;
+        return window.api.print(html);
+    };
+
+    const printWorkforcePaymentReceipt = (p) => {
+        const html = `
+      <html>
+        <head>
+          <style>
+            @page { margin: 0; }
+            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
+            .header-info { margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 8px; }
+            h2 { margin: 5px 0; font-size: 14px; }
+            .voucher-title { font-size: 12px; font-weight: bold; background: #000; color: #fff; padding: 4px; margin-bottom: 10px; }
+            .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+            .amount-box { border: 2px double #000; padding: 10px; font-size: 16px; font-weight: bold; margin: 10px 0; }
+            .sig { margin-top: 20px; border-top: 1px solid #000; padding-top: 5px; font-size: 9px; text-align: left; }
+          </style>
+        </head>
+        <body>
+          <div class="header-info">
+            <h2>${settings.shop_name || 'Eunika Collection'}</h2>
+            <div class="voucher-title">PAYMENT ADVICE</div>
+          </div>
+          <div class="details">
+            <div class="row"><span>Date:</span><span>${new Date().toLocaleString()}</span></div>
+            <div class="row"><span>Staff Name:</span><span>${p.worker_name}</span></div>
+            <div class="row"><span>Method:</span><span>${p.payment_mode || 'Cash'}</span></div>
+          </div>
+          <div class="amount-box">
+            PAID: Ksh ${Number(p.amount).toFixed(2)}
+          </div>
+          <div class="sig">
+            <div style="margin-bottom: 20px;">Staff Signature: __________________</div>
+            <div>Authorized By: ${user.full_name}</div>
+          </div>
+          <div style="margin-top: 15px; font-size: 8px; opacity: 0.7;">Software by Whose Folt</div>
+        </body>
+      </html>
+    `;
+        return window.api.print(html);
     };
 
     if (!user) {
         return (
             <div className="login-screen">
+                {processing && (
+                    <div className="processing-overlay">
+                        <div className="spinner"></div>
+                        <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>Authenticating...</div>
+                    </div>
+                )}
                 <form className="login-card" onSubmit={async (e) => {
                     e.preventDefault();
-                    const res = await window.api.login(e.target.username.value, e.target.password.value);
-                    if (res.success) {
-                        setUser(res.user);
-                        setView('hub');
+                    setProcessing(true);
+                    try {
+                        const res = await window.api.login(e.target.username.value, e.target.password.value);
+                        if (res.success) {
+                            setUser(res.user);
+                            setView('hub');
+                        }
+                        else showToast(res.message, 'error');
+                    } finally {
+                        setProcessing(false);
                     }
-                    else alert(res.message);
                 }}>
                     <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
                         <img src={logo} style={{ width: '80px', height: '80px', borderRadius: '50%', marginBottom: '1rem' }} />
@@ -531,7 +709,17 @@ function App() {
     }
 
     if (showAdmin) {
-        return <AdminPanel user={user} onBack={() => setShowAdmin(false)} onGoToPOS={() => { setShowAdmin(false); setView('pos'); }} />;
+        return <AdminPanel
+            user={user}
+            onBack={() => { setShowAdmin(false); setView('hub'); }}
+            onGoToPOS={() => { setShowAdmin(false); setView('pos'); }}
+            showToast={showToast}
+            printExpenseReceipt={printExpenseReceipt}
+            printWorkforcePaymentReceipt={printWorkforcePaymentReceipt}
+            base64Logo={base64Logo}
+            gallery={gallery}
+            loadData={loadData}
+        />;
     }
 
     if (view === 'hub') {
@@ -542,11 +730,17 @@ function App() {
             { id: 'deposits_measurements', title: 'Fitting & Deposit', icon: '📏' },
             { id: 'expense_tracker', title: 'Shop Expenses', icon: '💸' },
             { id: 'custom_tailoring', title: 'Custom Tailoring', icon: '✂' },
-            { id: 'samples_dashboard', title: 'Style Gallery', icon: '👔' },
+            { id: 'gallery', title: 'Style Gallery', icon: '🖼️' },
         ];
 
         return (
             <div className="hub-screen">
+                {processing && (
+                    <div className="processing-overlay">
+                        <div className="spinner"></div>
+                        <div style={{ fontWeight: 'bold' }}>Updating System...</div>
+                    </div>
+                )}
                 <div className="hub-header-futuristic">
                     <h1 style={{ textTransform: 'uppercase' }}>{settings.shop_name ? settings.shop_name.split(' ')[0] : 'EUNIKA'}</h1>
                     <p>{settings.shop_name || 'Eunika Collection'} // Selection Protocol</p>
@@ -601,6 +795,12 @@ function App() {
     if (view === 'pos' || view === 'selling_materials') {
         return (
             <div className="app">
+                {processing && (
+                    <div className="processing-overlay">
+                        <div className="spinner"></div>
+                        <div style={{ fontWeight: 'bold' }}>Processing Sale...</div>
+                    </div>
+                )}
                 <header className="header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <button className="btn-back-nav" onClick={() => setView('hub')}>← Dashboard</button>
@@ -745,6 +945,17 @@ function App() {
         );
     }
 
+    if (view === 'gallery') {
+        return <GalleryView
+            gallery={gallery}
+            loadData={loadData}
+            onBack={() => setView('hub')}
+            showToast={showToast}
+            processing={processing}
+            setProcessing={setProcessing}
+        />;
+    }
+
     if (view === 'materials_service') {
         const handleAddService = async (e) => {
             e.preventDefault();
@@ -763,13 +974,18 @@ function App() {
                 cashier_name: user.full_name,
                 cashier_id: user.id
             };
-            const res = await window.api.addService(data);
-            if (res.success) {
-                alert(`Service Intake Successful.Code: ${res.code} `);
-                printServiceReceipt({ ...data, service_code: res.code, paid_amount: data.paid_amount }, data.paid_amount);
-                e.target.reset();
-                loadData();
-            } else alert(res.message);
+            setProcessing(true);
+            try {
+                const res = await window.api.addService(data);
+                if (res.success) {
+                    showToast('Intake Successful! Printing Receipt...', 'success');
+                    await printServiceReceipt({ ...data, service_code: res.code, paid_amount: data.paid_amount }, data.paid_amount);
+                    e.target.reset();
+                    await loadData();
+                } else showToast(res.message, 'error');
+            } finally {
+                setProcessing(false);
+            }
         };
 
         const handlePayBalance = (srv) => {
@@ -785,7 +1001,7 @@ function App() {
                 cashier_id: user.id
             });
             if (res.success) loadData();
-            else alert(res.message);
+            else showToast(res.message, 'error');
         };
 
         const handleProcessServicePayment = async (e) => {
@@ -810,27 +1026,39 @@ function App() {
                 if (status === 'pending') status = 'ready';
             }
 
-            const res = await window.api.updateServicePayment({
-                id: srv.id,
-                amount: numericAmount,
-                status,
-                payment_mode: pMode,
-                mpesa_code: mCode,
-                cashier_name: user.full_name,
-                cashier_id: user.id
-            });
+            setProcessing(true);
+            try {
+                const res = await window.api.updateServicePayment({
+                    id: srv.id,
+                    amount: numericAmount,
+                    status,
+                    payment_mode: pMode,
+                    mpesa_code: mCode,
+                    cashier_name: user.full_name,
+                    cashier_id: user.id
+                });
 
-            if (res.success) {
-                printServiceReceipt({ ...srv, paid_amount: paid + numericAmount }, numericAmount);
-                setServicePayment(null);
-                loadData();
-            } else alert(res.message);
+                if (res.success) {
+                    showToast('Payment Processed! Printing Receipt...', 'success');
+                    await printServiceReceipt({ ...srv, paid_amount: paid + numericAmount }, numericAmount);
+                    setServicePayment(null);
+                    await loadData();
+                } else showToast(res.message, 'error');
+            } finally {
+                setProcessing(false);
+            }
         };
 
 
 
         return (
             <div className="app">
+                {processing && (
+                    <div className="processing-overlay">
+                        <div className="spinner"></div>
+                        <div style={{ fontWeight: 'bold' }}>Updating Service Record...</div>
+                    </div>
+                )}
                 <header className="header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <button className="btn-back-nav" onClick={() => setView('hub')}>← Dashboard</button>
@@ -1037,13 +1265,18 @@ function App() {
                 cashier_id: user.id
             };
 
-            const res = await window.api.addFittingDeposit(data);
-            if (res.success) {
-                alert(`Fitting Intake Successful.Code: ${res.code} `);
-                printFittingReceipt({ ...data, fitting_code: res.code }, data.paid_amount);
-                e.target.reset();
-                loadData();
-            } else alert(res.message);
+            setProcessing(true);
+            try {
+                const res = await window.api.addFittingDeposit(data);
+                if (res.success) {
+                    showToast('Intake Successful! Printing Receipt...', 'success');
+                    await printFittingReceipt({ ...data, fitting_code: res.code }, data.paid_amount);
+                    e.target.reset();
+                    await loadData();
+                } else showToast(res.message, 'error');
+            } finally {
+                setProcessing(false);
+            }
         };
 
         const handlePayFitting = (fit) => {
@@ -1059,26 +1292,38 @@ function App() {
             const pMode = e.target.payment_mode.value;
             const mCode = e.target.mpesa_code?.value || '';
 
-            const res = await window.api.updateFittingPayment({
-                id: fit.id,
-                amount: numericAmount,
-                payment_mode: pMode,
-                mpesa_code: mCode,
-                cashier_name: user.full_name,
-                cashier_id: user.id
-            });
+            setProcessing(true);
+            try {
+                const res = await window.api.updateFittingPayment({
+                    id: fit.id,
+                    amount: numericAmount,
+                    payment_mode: pMode,
+                    mpesa_code: mCode,
+                    cashier_name: user.full_name,
+                    cashier_id: user.id
+                });
 
-            if (res.success) {
-                // Ensure print uses numeric addition
-                const totalPaidNow = Number(fit.paid_amount) + numericAmount;
-                printFittingReceipt({ ...fit, paid_amount: totalPaidNow }, numericAmount);
-                setFittingPayment(null);
-                loadData();
-            } else alert(res.message);
+                if (res.success) {
+                    showToast('Payment Processed! Printing Receipt...', 'success');
+                    // Ensure print uses numeric addition
+                    const totalPaidNow = Number(fit.paid_amount) + numericAmount;
+                    await printFittingReceipt({ ...fit, paid_amount: totalPaidNow }, numericAmount);
+                    setFittingPayment(null);
+                    await loadData();
+                } else showToast(res.message, 'error');
+            } finally {
+                setProcessing(false);
+            }
         };
 
         return (
             <div className="app">
+                {processing && (
+                    <div className="processing-overlay">
+                        <div className="spinner"></div>
+                        <div style={{ fontWeight: 'bold' }}>Updating Fitting Record...</div>
+                    </div>
+                )}
                 <header className="header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <button className="btn-back-nav" onClick={() => setView('hub')}>← Dashboard</button>
@@ -1247,16 +1492,6 @@ function App() {
 
 
 
-    if (view === 'samples_dashboard') {
-        return (
-            <GalleryView
-                user={user}
-                gallery={gallery}
-                loadData={loadData}
-                onBack={() => setView('hub')}
-            />
-        );
-    }
 
     if (view === 'custom_tailoring') {
         return (
@@ -1264,12 +1499,15 @@ function App() {
             <TailoringView
                 user={user}
                 tailoringOrders={tailoringOrders}
-                gallery={gallery}
                 materials={materials}
+                gallery={gallery}
                 loadData={loadData}
                 onBack={() => setView('hub')}
                 printTailoringReceipt={printTailoringReceipt}
                 printTailoringSpecs={printTailoringSpecs}
+                showToast={showToast}
+                processing={processing}
+                setProcessing={setProcessing}
             />
         );
     }
@@ -1278,24 +1516,37 @@ function App() {
         const handleAddExpense = async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
-            const res = await window.api.addExpense({
-                description: fd.get('description'),
-                amount: Number(fd.get('amount')),
-                category: fd.get('category'),
-                payment_mode: fd.get('payment_mode_exp'),
-                mpesa_code: fd.get('mpesa_code'),
-                cashier_id: user.id,
-                cashier_name: user.full_name
-            });
-            if (res.success) {
-                alert('Expense recorded successfully');
-                e.target.reset();
-                loadData();
-            } else alert(res.message);
+            setProcessing(true);
+            try {
+                const expenseData = {
+                    description: fd.get('description'),
+                    amount: Number(fd.get('amount')),
+                    category: fd.get('category'),
+                    payment_mode: fd.get('payment_mode_exp'),
+                    mpesa_code: fd.get('mpesa_code'),
+                    cashier_id: user.id,
+                    cashier_name: user.full_name
+                };
+                const res = await window.api.addExpense(expenseData);
+                if (res.success) {
+                    showToast('Expense recorded! Printing Voucher...', 'success');
+                    await printExpenseReceipt(expenseData);
+                    e.target.reset();
+                    await loadData();
+                } else showToast(res.message, 'error');
+            } finally {
+                setProcessing(false);
+            }
         };
 
         return (
             <div className="app">
+                {processing && (
+                    <div className="processing-overlay">
+                        <div className="spinner"></div>
+                        <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>Working...</div>
+                    </div>
+                )}
                 <header className="header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <button className="btn-back-nav" onClick={() => setView('hub')}>← Dashboard</button>

@@ -6,7 +6,6 @@
   "main": "electron/main.cjs",
   "description": "Point of Sale desktop application",
   "author": "Joseph Mutonga",
-
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -16,28 +15,37 @@
     "electron:dev": "concurrently \"npm run dev\" \"npm run electron\"",
     "electron:build": "vite build && electron-builder --win"
   },
-
   "build": {
     "appId": "com.pointofsale.app",
     "productName": "Point Of Sale",
+    "directories": {
+      "output": "release"
+    },
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**/*"
+    ],
     "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "node_modules/**/*",
+      "dist",
+      "electron",
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "src/assets/logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
     }
   },
-
   "dependencies": {
     "better-sqlite3": "^12.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
-
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/react": "^19.2.5",
@@ -45,7 +53,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.1",
     "electron": "^39.2.7",
-    "electron-builder": "^26.4.0",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
