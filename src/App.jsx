@@ -479,12 +479,13 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 0; }
+            @page { size: 80mm auto; margin: 0; }
             body { 
+                box-sizing: border-box;
                 font-family: 'Courier New', monospace; 
                 padding: 10px; 
                 text-align: center; 
-                width: 280px; 
+                width: 80mm; 
                 margin: auto; 
                 font-size: 11px; 
             }

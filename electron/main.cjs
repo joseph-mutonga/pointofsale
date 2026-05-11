@@ -856,86 +856,100 @@ ipcMain.handle('get-printers', async (event) => {
 ipcMain.handle('print', async (_, html) => {
     let printWin = null;
     try {
-        printWin = new BrowserWindow({ 
-            show: false, 
-            width: 800, 
-            height: 600, 
-            webPreferences: { 
-                nodeIntegration: false,
-                contextIsolation: true
-            } 
-        });
-        await printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-
-        // Check if a specific printer is configured
+        // Load printer settings
         let printerName = null;
+        let numCopies = 1;
         try {
-            const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('default_printer');
-            if (setting && setting.value) printerName = setting.value;
-        } catch (e) { /* ignore db error */ }
-
-        let printedDirectly = false;
-
-        if (printerName && printerName !== 'PDF') {
-            const printers = await printWin.webContents.getPrintersAsync();
-            const target = printers.find(p => p.name === printerName);
-
-            if (target) {
-                console.log(`Printing silently to: ${printerName}`);
-                await new Promise((resolve, reject) => {
-                    printWin.webContents.print({
-                        silent: true,
-                        deviceName: printerName,
-                        printBackground: true,
-                        margins: { marginType: 'none' }
-                    }, (success, errorType) => {
-                        if (!success) reject(new Error(errorType));
-                        else resolve();
-                    });
-                });
-                printedDirectly = true;
-            } else {
-                console.warn(`Configured printer '${printerName}' not found. Falling back to PDF.`);
-            }
+            const printerSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('default_printer');
+            const copiesSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('print_copies');
+            
+            if (printerSetting && printerSetting.value) printerName = printerSetting.value;
+            if (copiesSetting && copiesSetting.value) numCopies = parseInt(copiesSetting.value) || 1;
+        } catch (e) { 
+            console.warn('Error loading printer settings:', e.message);
         }
 
-        if (printedDirectly) {
-            printWin.close();
+        // Ensure numCopies is valid
+        numCopies = Math.min(Math.max(numCopies, 1), 10);
+        
+        console.log(`Print Job: printer=${printerName || 'Not configured'}, copies=${numCopies}`);
+
+        // If no printer configured, silently skip (no PDF opening)
+        if (!printerName) {
+            console.log('No printer configured. Print job skipped silently.');
             return { success: true };
         }
 
-        // Generate PDF instead of printing to device (Fallback)
-        const pdfData = await printWin.webContents.printToPDF({
-            printBackground: true,
-            margins: { top: 0, bottom: 0, left: 0, right: 0 }
-        });
+        // Print multiple copies to configured printer
+        let successCount = 0;
+        for (let copy = 1; copy <= numCopies; copy++) {
+            printWin = new BrowserWindow({ 
+                show: false, 
+                width: 800, 
+                height: 600, 
+                webPreferences: { 
+                    nodeIntegration: false,
+                    contextIsolation: true
+                } 
+            });
+            
+            try {
+                await printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 
-        const receiptsDir = path.join(app.getPath('documents'), 'receipts');
-        if (!fs.existsSync(receiptsDir)) {
-            fs.mkdirSync(receiptsDir, { recursive: true });
+                const printers = await printWin.webContents.getPrintersAsync();
+                const target = printers.find(p => p.name === printerName);
+
+                if (target) {
+                    console.log(`[Copy ${copy}/${numCopies}] Printing to: ${printerName}`);
+                    
+                    await new Promise((resolve, reject) => {
+                        printWin.webContents.print({
+                            silent: true,
+                            deviceName: printerName,
+                            printBackground: true,
+                            margins: { marginType: 'none' }
+                        }, (success, errorType) => {
+                            if (!success) {
+                                reject(new Error(`Print failed: ${errorType}`));
+                            } else {
+                                resolve();
+                            }
+                        });
+                    });
+                    
+                    successCount++;
+                    console.log(`✓ Copy ${copy} printed successfully`);
+                } else {
+                    console.warn(`Printer '${printerName}' not found on system.`);
+                    printWin.close();
+                    return { success: false, message: `Printer '${printerName}' not found. Check printer connection and try again.` };
+                }
+            } catch (printErr) {
+                console.error(`Print error on copy ${copy}:`, printErr.message);
+                printWin.close();
+                return { success: false, message: `Print failed: ${printErr.message}` };
+            }
+
+            // Close window after successful print
+            if (printWin) {
+                printWin.close();
+                printWin = null;
+            }
+
+            // Small delay between copies
+            if (copy < numCopies) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
         }
 
-        const filename = `receipt_${Date.now()}.pdf`;
-        const filePath = path.join(receiptsDir, filename);
-
-        fs.writeFileSync(filePath, pdfData);
-        console.log('Receipt saved to:', filePath);
-
-        printWin.close();
-
-        // Open the PDF to simulate "printing" / let user see the result immediately
-        // Check if user wants to open the PDF automatically
-        try {
-            const autoOpen = db.prepare('SELECT value FROM settings WHERE key = ?').get('auto_open_pdf');
-            if (autoOpen && autoOpen.value === 'true') {
-                require('electron').shell.openPath(filePath);
-            }
-        } catch (e) { }
-
-        return { success: true, savedPath: filePath };
+        console.log(`✓ All ${successCount} copies printed successfully`);
+        return { success: true, copies: successCount };
+        
     } catch (e) {
         console.error('Print error:', e);
-        if (printWin) printWin.close();
+        if (printWin) {
+            try { printWin.close(); } catch (err) { }
+        }
         return { success: false, message: e.message };
     }
 });

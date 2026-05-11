@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import logo from './assets/logo.png';
+import PrinterSettings from './components/PrinterSettings';
 
 export default function AdminPanel({ user, onBack, showToast, printExpenseReceipt, printWorkforcePaymentReceipt, base64Logo, loadData }) {
     const [view, setView] = useState('inventory');
@@ -1589,80 +1590,68 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                     )}
 
                     {view === 'settings' && (
-                        <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
-                            <div className="card-header">Global Shop Settings</div>
-                            <div className="card-body">
-                                <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '20px' }}>
-                                    Changes made here will reflect on all printed receipts and system headers immediately.
-                                </p>
-                                <form onSubmit={async (e) => {
-                                    e.preventDefault();
-                                    const fd = new FormData(e.target);
-                                    const data = Object.fromEntries(fd);
-                                    setProcessing(true);
-                                    try {
-                                        const res = await window.api.updateSettings(data);
-                                        if (res.success) {
-                                            if (showToast) showToast('Settings updated successfully!', 'success');
-                                            await loadAll();
-                                        } else {
-                                            if (showToast) showToast('Failed to update settings: ' + res.message, 'error');
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+                            {/* Printer Settings */}
+                            <PrinterSettings showToast={showToast} />
+
+                            {/* Global Shop Settings */}
+                            <div className="card">
+                                <div className="card-header">Global Shop Settings</div>
+                                <div className="card-body">
+                                    <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '20px' }}>
+                                        Changes made here will reflect on all printed receipts and system headers immediately.
+                                    </p>
+                                    <form onSubmit={async (e) => {
+                                        e.preventDefault();
+                                        const fd = new FormData(e.target);
+                                        const data = Object.fromEntries(fd);
+                                        setProcessing(true);
+                                        try {
+                                            const res = await window.api.updateSettings(data);
+                                            if (res.success) {
+                                                if (showToast) showToast('Settings updated successfully!', 'success');
+                                                await loadAll();
+                                            } else {
+                                                if (showToast) showToast('Failed to update settings: ' + res.message, 'error');
+                                            }
+                                        } finally {
+                                            setProcessing(false);
                                         }
-                                    } finally {
-                                        setProcessing(false);
-                                    }
-                                }}>
-                                    <div className="form-group">
-                                        <label className="label">Receipt Printer</label>
-                                        <select name="default_printer" defaultValue={settings.default_printer || ''} className="input" style={{ width: '100%' }}>
-                                            <option value="">-- Save as PDF (Default) --</option>
-                                            {printers.map(p => (
-                                                <option key={p.name} value={p.name}>{p.name} {p.isDefault ? '(System Default)' : ''}</option>
-                                            ))}
-                                        </select>
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '4px' }}>
-                                            Select "Save as PDF" to preview receipt before printing. Select a printer for instant silent printing.
+                                    }}>
+                                        <div className="form-group">
+                                            <label className="label">Shop Name</label>
+                                            <input name="shop_name" defaultValue={settings.shop_name} placeholder="e.g. Eunika Collection" required />
                                         </div>
-                                    </div>
-                                    <div className="form-group">
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
-                                            <input type="checkbox" name="auto_open_pdf" defaultChecked={settings.auto_open_pdf === 'true'} value="true" style={{ width: 'auto' }} />
-                                            <label className="label" style={{ marginBottom: 0 }}>Auto-Open Receipt PDF (if no printer)</label>
+                                        <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                            <div>
+                                                <label className="label">Contact Phone</label>
+                                                <input name="shop_phone" defaultValue={settings.shop_phone} placeholder="+254 712 345 678" />
+                                            </div>
+                                            <div>
+                                                <label className="label">Shop Email</label>
+                                                <input name="shop_email" defaultValue={settings.shop_email} placeholder="info@shop.com" />
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div className="form-group">
-                                        <label className="label">Shop Name</label>
-                                        <input name="shop_name" defaultValue={settings.shop_name} placeholder="e.g. Eunika Collection" required />
-                                    </div>
-                                    <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                        <div>
-                                            <label className="label">Contact Phone</label>
-                                            <input name="shop_phone" defaultValue={settings.shop_phone} placeholder="+254 712 345 678" />
+                                        <div className="form-group">
+                                            <label className="label">Physical Address</label>
+                                            <input name="shop_address" defaultValue={settings.shop_address} placeholder="Street, Building, Town" />
                                         </div>
-                                        <div>
-                                            <label className="label">Shop Email</label>
-                                            <input name="shop_email" defaultValue={settings.shop_email} placeholder="info@shop.com" />
+                                        <div className="form-group">
+                                            <label className="label">Receipt Footer Message</label>
+                                            <textarea
+                                                name="receipt_footer"
+                                                defaultValue={settings.receipt_footer}
+                                                rows="3"
+                                                className="input"
+                                                style={{ width: '100%', resize: 'vertical' }}
+                                                placeholder="e.g. Goods once sold cannot be returned. Thank you!"
+                                            />
                                         </div>
-                                    </div>
-                                    <div className="form-group">
-                                        <label className="label">Physical Address</label>
-                                        <input name="shop_address" defaultValue={settings.shop_address} placeholder="Street, Building, Town" />
-                                    </div>
-                                    <div className="form-group">
-                                        <label className="label">Receipt Footer Message</label>
-                                        <textarea
-                                            name="receipt_footer"
-                                            defaultValue={settings.receipt_footer}
-                                            rows="3"
-                                            className="input"
-                                            style={{ width: '100%', resize: 'vertical' }}
-                                            placeholder="e.g. Goods once sold cannot be returned. Thank you!"
-                                        />
-                                    </div>
-                                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px', marginTop: '10px' }}>
-                                        Save Configuration
-                                    </button>
-                                </form>
+                                        <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px', marginTop: '10px' }}>
+                                            Save Configuration
+                                        </button>
+                                    </form>
+                                </div>
                             </div>
                         </div>
                     )}
