@@ -7,13 +7,11 @@
   "description": "Point of Sale desktop application",
   "author": "Joseph Mutonga",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"node server/server.js\"",
+    "server": "node server/server.js",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "electron": "wait-on tcp:5173 && electron .",
-    "electron:dev": "concurrently \"npm run dev\" \"npm run electron\"",
-    "electron:build": "vite build && electron-builder --win"
+    "preview": "vite preview"
   },
   "build": {
     "appId": "com.pointofsale.app",
@@ -32,7 +30,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "src/assets/logo.png"
+      "icon": "release/.icon-ico/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -42,9 +40,15 @@
     }
   },
   "dependencies": {
+    "axios": "^1.16.1",
     "better-sqlite3": "^12.6.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mysql2": "^3.22.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "sqlite3": "^6.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

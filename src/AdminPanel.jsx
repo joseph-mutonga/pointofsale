@@ -75,6 +75,9 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
             } else if (view === 'tailoring') {
                 const tords = await window.api.getTailoringOrders();
                 setTailoringOrders(tords || []);
+            } else if (view === 'deadlines') {
+                const tords = await window.api.getTailoringOrders();
+                setTailoringOrders(tords || []);
             } else if (view === 'expenses') {
                 const exps = await window.api.getExpenses();
                 setExpenses(exps || []);
@@ -297,8 +300,7 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
         try {
             const res = await window.api.addExpense(expenseData);
             if (res.success) {
-                if (showToast) showToast('Expense recorded. Printing voucher...', 'success');
-                if (printExpenseReceipt) printExpenseReceipt(expenseData);
+                if (showToast) showToast('Expense recorded successfully.', 'success');
                 setShowExpenseForm(false);
                 await loadAll();
             } else {
@@ -369,6 +371,7 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                     <button className="btn" style={{ background: view === 'services' ? '#3b82f6' : 'transparent', color: 'white' }} onClick={() => setView('services')}>Services</button>
                     <button className="btn" style={{ background: view === 'fittings' ? '#3b82f6' : 'transparent', color: 'white' }} onClick={() => setView('fittings')}>Fittings</button>
                     <button className="btn" style={{ background: view === 'tailoring' ? '#3b82f6' : 'transparent', color: 'white' }} onClick={() => setView('tailoring')}>Tailoring</button>
+                    <button className="btn" style={{ background: view === 'deadlines' ? '#f59e0b' : 'transparent', color: 'white' }} onClick={() => setView('deadlines')}>⏰ Deadlines</button>
                     <button className="btn" style={{ background: view === 'expenses' ? '#3b82f6' : 'transparent', color: 'white' }} onClick={() => setView('expenses')}>Expenses</button>
                     <button className="btn" style={{ background: view === 'workforce' ? '#3b82f6' : 'transparent', color: 'white' }} onClick={() => setView('workforce')}>Workforce</button>
                     <button className="btn" style={{ background: view === 'resources' ? '#3b82f6' : 'transparent', color: 'white' }} onClick={() => setView('resources')}>Resources</button>
@@ -1092,8 +1095,9 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                                     <td>
                                                         {(() => {
                                                             try {
-                                                                const m = JSON.parse(o.measurements || '{}');
-                                                                return <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>{m.type || 'Custom'}</div>;
+                                                                const m = JSON.parse(o.measurements || '[]');
+                                                                const sets = Array.isArray(m) ? m : [m];
+                                                                return <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>{sets.map(set => set.type || 'Custom').join(', ')}</div>;
                                                             } catch { return null; }
                                                         })()}
                                                         <div style={{ fontWeight: '500' }}>{o.style_name || 'Custom Design'}</div>
@@ -1126,6 +1130,291 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                         })}
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'deadlines' && (
+                        <div>
+                            <div className="card">
+                                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>⏰ Order Deadlines Overview</span>
+                                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                        {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                                    </div>
+                                </div>
+                                <div className="card-body">
+                                    {(() => {
+                                        const today = new Date();
+                                        today.setHours(0, 0, 0, 0);
+
+                                        const tomorrow = new Date(today);
+                                        tomorrow.setDate(tomorrow.getDate() + 1);
+
+                                        const dayAfterTomorrow = new Date(today);
+                                        dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+
+                                        // Filter and sort orders by deadline
+                                        const urgentOrders = tailoringOrders.filter(order => {
+                                            if (order.status === 'collected') return false;
+                                            const deadline = new Date(order.deadline);
+                                            deadline.setHours(0, 0, 0, 0);
+                                            return deadline <= tomorrow;
+                                        }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+
+                                        const upcomingOrders = tailoringOrders.filter(order => {
+                                            if (order.status === 'collected') return false;
+                                            const deadline = new Date(order.deadline);
+                                            deadline.setHours(0, 0, 0, 0);
+                                            return deadline > tomorrow && deadline <= dayAfterTomorrow;
+                                        }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+
+                                        const futureOrders = tailoringOrders.filter(order => {
+                                            if (order.status === 'collected') return false;
+                                            const deadline = new Date(order.deadline);
+                                            deadline.setHours(0, 0, 0, 0);
+                                            return deadline > dayAfterTomorrow;
+                                        }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+
+                                        return (
+                                            <div style={{ display: 'grid', gap: '20px' }}>
+                                                {/* Urgent Orders - Due Today or Tomorrow */}
+                                                {urgentOrders.length > 0 && (
+                                                    <div>
+                                                        <div style={{
+                                                            fontSize: '1.1rem',
+                                                            fontWeight: 'bold',
+                                                            color: '#ef4444',
+                                                            marginBottom: '15px',
+                                                            padding: '10px',
+                                                            background: 'rgba(239, 68, 68, 0.1)',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid rgba(239, 68, 68, 0.3)'
+                                                        }}>
+                                                            🚨 URGENT - Due Today or Tomorrow ({urgentOrders.length} orders)
+                                                        </div>
+                                                        <div style={{ display: 'grid', gap: '12px' }}>
+                                                            {urgentOrders.map(order => {
+                                                                const deadline = new Date(order.deadline);
+                                                                const isToday = deadline.toDateString() === today.toDateString();
+                                                                const daysLeft = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
+
+                                                                return (
+                                                                    <div key={order.id} style={{
+                                                                        padding: '15px',
+                                                                        borderRadius: '10px',
+                                                                        border: '2px solid #ef4444',
+                                                                        background: 'rgba(239, 68, 68, 0.05)',
+                                                                        display: 'flex',
+                                                                        justifyContent: 'space-between',
+                                                                        alignItems: 'center',
+                                                                        boxShadow: '0 2px 8px rgba(239, 68, 68, 0.2)'
+                                                                    }}>
+                                                                        <div style={{ flex: 1 }}>
+                                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                                                                                <span style={{
+                                                                                    fontFamily: 'monospace',
+                                                                                    fontWeight: 'bold',
+                                                                                    fontSize: '1.1rem',
+                                                                                    color: '#ef4444'
+                                                                                }}>
+                                                                                    {order.order_code}
+                                                                                </span>
+                                                                                <span style={{
+                                                                                    padding: '2px 8px',
+                                                                                    borderRadius: '12px',
+                                                                                    fontSize: '0.7rem',
+                                                                                    fontWeight: 'bold',
+                                                                                    background: isToday ? '#fee2e2' : '#fed7d7',
+                                                                                    color: isToday ? '#b91c1c' : '#c53030'
+                                                                                }}>
+                                                                                    {isToday ? 'TODAY' : 'TOMORROW'}
+                                                                                </span>
+                                                                            </div>
+                                                                            <div style={{ fontWeight: '600', marginBottom: '4px' }}>{order.customer_name}</div>
+                                                                            <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '4px' }}>
+                                                                                {(() => {
+                                                                                    try {
+                                                                                        const m = JSON.parse(order.measurements || '[]');
+                                                                                        const sets = Array.isArray(m) ? m : [m];
+                                                                                        return sets.map(set => set.type || 'Custom').join(', ');
+                                                                                    } catch { return 'Custom'; }
+                                                                                })()}
+                                                                            </div>
+                                                                            <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                                                                Balance: Ksh {(Number(order.total_price) - Number(order.paid_amount)).toFixed(2)}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div style={{ textAlign: 'right', minWidth: '120px' }}>
+                                                                            <div style={{
+                                                                                fontWeight: 'bold',
+                                                                                fontSize: '1.1rem',
+                                                                                color: '#ef4444',
+                                                                                marginBottom: '4px'
+                                                                            }}>
+                                                                                {deadline.toLocaleDateString()}
+                                                                            </div>
+                                                                            <div style={{
+                                                                                fontSize: '0.8rem',
+                                                                                color: isToday ? '#b91c1c' : '#c53030',
+                                                                                fontWeight: 'bold'
+                                                                            }}>
+                                                                                {daysLeft === 0 ? 'DUE TODAY' : daysLeft === 1 ? 'DUE TOMORROW' : `${daysLeft} days left`}
+                                                                            </div>
+                                                                            <button
+                                                                                className="btn"
+                                                                                style={{
+                                                                                    marginTop: '8px',
+                                                                                    padding: '6px 12px',
+                                                                                    fontSize: '0.8rem',
+                                                                                    background: '#3b82f6',
+                                                                                    color: 'white'
+                                                                                }}
+                                                                                onClick={() => setTailoringOrderToView(order)}
+                                                                            >
+                                                                                View Details
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* Upcoming Orders - Due Soon */}
+                                                {upcomingOrders.length > 0 && (
+                                                    <div>
+                                                        <div style={{
+                                                            fontSize: '1.1rem',
+                                                            fontWeight: 'bold',
+                                                            color: '#f59e0b',
+                                                            marginBottom: '15px',
+                                                            padding: '10px',
+                                                            background: 'rgba(245, 158, 11, 0.1)',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid rgba(245, 158, 11, 0.3)'
+                                                        }}>
+                                                            📅 Due Soon - Day After Tomorrow ({upcomingOrders.length} orders)
+                                                        </div>
+                                                        <div style={{ display: 'grid', gap: '10px' }}>
+                                                            {upcomingOrders.map(order => (
+                                                                <div key={order.id} style={{
+                                                                    padding: '12px',
+                                                                    borderRadius: '8px',
+                                                                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                                                                    background: 'rgba(245, 158, 11, 0.05)',
+                                                                    display: 'flex',
+                                                                    justifyContent: 'space-between',
+                                                                    alignItems: 'center'
+                                                                }}>
+                                                                    <div>
+                                                                        <div style={{ fontWeight: '600', marginBottom: '4px' }}>
+                                                                            {order.order_code} - {order.customer_name}
+                                                                        </div>
+                                                                        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                                                            {(() => {
+                                                                                try {
+                                                                                    const m = JSON.parse(order.measurements || '[]');
+                                                                                    const sets = Array.isArray(m) ? m : [m];
+                                                                                    return sets.map(set => set.type || 'Custom').join(', ');
+                                                                                } catch { return 'Custom'; }
+                                                                            })()}
+                                                                        </div>
+                                                                    </div>
+                                                                    <div style={{ textAlign: 'right' }}>
+                                                                        <div style={{ fontWeight: 'bold', color: '#f59e0b' }}>
+                                                                            {new Date(order.deadline).toLocaleDateString()}
+                                                                        </div>
+                                                                        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                                                            Balance: Ksh {(Number(order.total_price) - Number(order.paid_amount)).toFixed(2)}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* Future Orders */}
+                                                {futureOrders.length > 0 && (
+                                                    <div>
+                                                        <div style={{
+                                                            fontSize: '1.1rem',
+                                                            fontWeight: 'bold',
+                                                            color: '#10b981',
+                                                            marginBottom: '15px',
+                                                            padding: '10px',
+                                                            background: 'rgba(16, 185, 129, 0.1)',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid rgba(16, 185, 129, 0.3)'
+                                                        }}>
+                                                            📆 Future Deadlines ({futureOrders.length} orders)
+                                                        </div>
+                                                        <div style={{ display: 'grid', gap: '8px' }}>
+                                                            {futureOrders.slice(0, 10).map(order => (
+                                                                <div key={order.id} style={{
+                                                                    padding: '10px',
+                                                                    borderRadius: '6px',
+                                                                    border: '1px solid rgba(16, 185, 129, 0.2)',
+                                                                    background: 'rgba(16, 185, 129, 0.02)',
+                                                                    display: 'flex',
+                                                                    justifyContent: 'space-between',
+                                                                    alignItems: 'center'
+                                                                }}>
+                                                                    <div>
+                                                                        <div style={{ fontWeight: '500' }}>
+                                                                            {order.order_code} - {order.customer_name}
+                                                                        </div>
+                                                                        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                                                            {(() => {
+                                                                                try {
+                                                                                    const m = JSON.parse(order.measurements || '[]');
+                                                                                    const sets = Array.isArray(m) ? m : [m];
+                                                                                    return sets.map(set => set.type || 'Custom').join(', ');
+                                                                                } catch { return 'Custom'; }
+                                                                            })()}
+                                                                        </div>
+                                                                    </div>
+                                                                    <div style={{ textAlign: 'right' }}>
+                                                                        <div style={{ fontWeight: 'bold', color: '#10b981' }}>
+                                                                            {new Date(order.deadline).toLocaleDateString()}
+                                                                        </div>
+                                                                        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                                                            {Math.ceil((new Date(order.deadline) - today) / (1000 * 60 * 60 * 24))} days left
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                            {futureOrders.length > 10 && (
+                                                                <div style={{
+                                                                    textAlign: 'center',
+                                                                    padding: '10px',
+                                                                    color: '#64748b',
+                                                                    fontStyle: 'italic'
+                                                                }}>
+                                                                    ... and {futureOrders.length - 10} more future orders
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* No orders message */}
+                                                {tailoringOrders.filter(o => o.status !== 'collected').length === 0 && (
+                                                    <div style={{
+                                                        textAlign: 'center',
+                                                        padding: '40px',
+                                                        color: '#64748b',
+                                                        fontSize: '1.1rem'
+                                                    }}>
+                                                        🎉 All orders are completed! No pending deadlines.
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -1430,8 +1719,7 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                                 };
                                                 const res = await window.api.addWorkforcePayment(paymentData);
                                                 if (res.success) {
-                                                    if (showToast) showToast('Payment recorded. Printing advice...', 'success');
-                                                    await printWorkforcePaymentReceipt(paymentData);
+                                                    if (showToast) showToast('Payment recorded successfully.', 'success');
                                                     e.target.reset();
                                                     await loadAll();
                                                 } else {
@@ -1975,17 +2263,18 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                     <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#334155', marginBottom: '12px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>MEASUREMENTS & NOTES</div>
                                     {(() => {
                                         try {
-                                            const m = JSON.parse(tailoringOrderToView.measurements || '{}');
-                                            return (
-                                                <>
+                                            const m = JSON.parse(tailoringOrderToView.measurements || '[]');
+                                            const sets = Array.isArray(m) ? m : [m];
+                                            return sets.map((set, idx) => (
+                                                <div key={idx} style={{ marginBottom: '20px', padding: '15px', background: '#f8fafc', borderRadius: '8px' }}>
                                                     <div style={{ marginBottom: '15px' }}>
-                                                        <span style={{ fontSize: '0.8rem', color: '#64748b', marginRight: '10px' }}>GARMENTS:</span>
+                                                        <span style={{ fontSize: '0.8rem', color: '#64748b', marginRight: '10px' }}>GARMENT {idx + 1}:</span>
                                                         <span style={{ background: '#3b82f6', color: 'white', padding: '2px 10px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                                            {m.type ? m.type.toUpperCase() : 'NOT SPECIFIED'}
+                                                            {set.type ? set.type.toUpperCase() : 'NOT SPECIFIED'}
                                                         </span>
                                                     </div>
-                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
-                                                        {Object.entries(m).map(([k, v]) => {
+                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '15px' }}>
+                                                        {Object.entries(set).map(([k, v]) => {
                                                             if (k === 'notes' || k === 'type' || !v) return null;
                                                             return (
                                                                 <div key={k} style={{ background: '#f1f5f9', padding: '10px', borderRadius: '6px' }}>
@@ -1995,14 +2284,16 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                                             );
                                                         })}
                                                     </div>
-                                                    <div>
-                                                        <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '6px' }}>Creation Notes / Description</div>
-                                                        <div style={{ background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', lineHeight: '1.5', minHeight: '60px', color: '#334155' }}>
-                                                            {m.notes || 'No additional notes provided.'}
+                                                    {set.notes && (
+                                                        <div>
+                                                            <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '6px' }}>Creation Notes / Description</div>
+                                                            <div style={{ background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', lineHeight: '1.5', minHeight: '60px', color: '#334155' }}>
+                                                                {set.notes}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                </>
-                                            );
+                                                    )}
+                                                </div>
+                                            ));
                                         } catch {
                                             return <div>Error parsing measurements</div>;
                                         }

@@ -218,6 +218,18 @@ function initDb() {
       category TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS mpesa_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      checkout_request_id TEXT UNIQUE,
+      merchant_request_id TEXT,
+      result_code INTEGER,
+      result_desc TEXT,
+      amount REAL,
+      mpesa_receipt TEXT,
+      transaction_date TEXT,
+      phone TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // --- COLUMN MIGRATIONS ---

@@ -40,6 +40,7 @@ function App() {
     const [settings, setSettings] = useState({});
     const [toast, setToast] = useState(null);
     const [processing, setProcessing] = useState(false);
+    const [stkStatus, setStkStatus] = useState(null);
     const [base64Logo, setBase64Logo] = useState(logo);
 
     useEffect(() => {
@@ -197,15 +198,48 @@ function App() {
         }
     };
 
+    const triggerSTKPush = async (amount, phone) => {
+        if (!phone) return showToast('Phone number is required for STK Push', 'error');
+        if (!amount || amount <= 0) return showToast('Invalid amount', 'error');
+
+        setProcessing(true);
+        setStkStatus('pending');
+        try {
+            const response = await fetch('http://localhost:5001/api/mpesa/stkpush', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    amount,
+                    phone,
+                    reference: 'POS-' + Date.now(),
+                    description: 'Eunika Payment'
+                })
+            });
+            const res = await response.json();
+            if (res.success) {
+                showToast('STK Push sent! Please check phone.', 'success');
+            } else {
+                showToast(res.message || 'STK Push failed', 'error');
+                setStkStatus('failed');
+            }
+        } catch (err) {
+            console.error('STK Error:', err);
+            showToast('Could not reach M-Pesa server.', 'error');
+            setStkStatus('failed');
+        } finally {
+            setProcessing(false);
+        }
+    };
+
     const printReceipt = (ref) => {
         const html = `
       <html>
         <head>
           <style>
-            @page { margin: 0; }
-            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
-            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
-            h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
+            @page { size: 72mm auto; margin: 0; }
+            body { box-sizing: border-box; font-family: 'Courier New', monospace; padding: 0 0 10px 0; text-align: left; width: 72mm; margin: 0; font-size: 12px; }
+            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding: 10px; text-align: center; }
+            h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; text-align: center; }
             .info-text { font-size: 10px; color: #000; line-height: 1.2; }
             table { width: 100%; border-collapse: collapse; margin: 10px 0; }
             th { border-bottom: 1px solid #000; text-align: left; padding: 4px 0; font-size: 10px; }
@@ -270,12 +304,12 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 0; }
-            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
-            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
-            h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
+            @page { size: 72mm auto; margin: 0; }
+            body { box-sizing: border-box; font-family: 'Courier New', monospace; padding: 0 0 10px 0; text-align: left; width: 72mm; margin: 0; font-size: 12px; }
+            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding: 10px; text-align: center; }
+            h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; text-align: center; }
             .info-text { font-size: 10px; color: #000; line-height: 1.2; }
-            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; background: #000; color: #fff; padding: 2px; text-transform: uppercase; }
+            .label-badge { font-size: 10px; font-weight: bold; margin: 10px; display: block; background: #000; color: #fff; padding: 2px; text-transform: uppercase; text-align: center; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
             .total-section { border-top: 1px double #000; margin-top: 10px; padding-top: 5px; }
@@ -332,12 +366,12 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 0; }
-            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
-            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
+            @page { size: 72mm auto; margin: 0; }
+            body { box-sizing: border-box; font-family: 'Courier New', monospace; padding: 0 0 10px 0; text-align: left; width: 72mm; margin: 0; font-size: 12px; }
+            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding: 10px; text-align: center; }
             h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
             .info-text { font-size: 10px; color: #000; line-height: 1.2; }
-            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; border: 1px solid #000; padding: 2px; text-transform: uppercase; }
+            .label-badge { font-size: 10px; font-weight: bold; margin: 10px; display: block; border: 1px solid #000; padding: 2px; text-transform: uppercase; text-align: center; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
             .total-section { border-top: 1px double #000; margin-top: 10px; padding-top: 5px; }
@@ -392,12 +426,12 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 0; }
-            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
-            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
-            h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; }
+            @page { size: 72mm auto; margin: 0; }
+            body { box-sizing: border-box; font-family: 'Courier New', monospace; padding: 0 0 10px 0; text-align: left; width: 72mm; margin: 0; font-size: 12px; }
+            .header-info { margin-bottom: 15px; border-bottom: 1px dashed #000; padding: 10px; text-align: center; }
+            h2 { margin: 5px 0; text-transform: uppercase; font-size: 16px; font-weight: 900; text-align: center; }
             .info-text { font-size: 10px; color: #000; line-height: 1.2; }
-            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; background: #000; color: #fff; padding: 2px; text-transform: uppercase; }
+            .label-badge { font-size: 10px; font-weight: bold; margin: 10px 0; display: block; background: #000; color: #fff; padding: 2px; text-transform: uppercase; text-align: center; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
             .total-section { border-top: 1px double #000; margin-top: 10px; padding-top: 5px; }
@@ -422,32 +456,14 @@ function App() {
             <div class="row"><span>Customer:</span><span>${ord.customer_name || 'Walking Customer'}</span></div>
             <div class="row"><span>Garments:</span><span style="font-weight: bold; text-transform: uppercase;">${(() => {
                 try {
-                    const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
-                    return m.type || 'Custom';
+                    const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '[]') : (ord.measurements || []);
+                    const sets = Array.isArray(m) ? m : [m];
+                    return sets.map(set => set.type || 'Custom').join(', ');
                 } catch { return 'Custom'; }
             })()}</span></div>
             <div class="row"><span>Style:</span><span>${ord.style_name || 'Custom'}</span></div>
             <div class="row"><span>Fabric:</span><span>${ord.material_name || 'Own Material'}</span></div>
             <div class="row"><span>DEADLINE:</span><span style="font-weight: bold;">${ord.deadline || 'N/A'}</span></div>
-          </div>
-
-          <div class="measurements">
-            <div style="font-weight: bold; text-decoration: underline; margin-bottom: 3px;">SPECS:</div>
-            ${(() => {
-                try {
-                    const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
-                    return Object.entries(m)
-                        .filter(([k, v]) => k !== 'notes' && k !== 'type' && v)
-                        .map(([k, v]) => `<div style="text-transform: capitalize;">${k.replace(/_/g, ' ')}: ${v}</div>`)
-                        .join('');
-                } catch { return 'N/A'; }
-            })()}
-            ${(() => {
-                try {
-                    const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
-                    return m.notes ? `<div style="margin-top: 3px; font-style: italic;">Notes: ${m.notes}</div>` : '';
-                } catch { return ''; }
-            })()}
           </div>
 
           <div class="details">
@@ -474,23 +490,24 @@ function App() {
     };
 
     const printTailoringSpecs = (ord) => {
-        const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '{}') : (ord.measurements || {});
+        const m = typeof ord.measurements === 'string' ? JSON.parse(ord.measurements || '[]') : (ord.measurements || []);
+        const sets = Array.isArray(m) ? m : [m];
         const html = `
       <html>
         <head>
           <style>
-            @page { size: 80mm auto; margin: 0; }
+            @page { size: 72mm auto; margin: 0; }
             body { 
                 box-sizing: border-box;
                 font-family: 'Courier New', monospace; 
-                padding: 10px; 
-                text-align: center; 
-                width: 80mm; 
-                margin: auto; 
+                padding: 0 0 10px 0; 
+                text-align: left; 
+                width: 72mm; 
+                margin: 0; 
                 font-size: 11px; 
             }
-            .header { border-bottom: 2px solid #000; padding-bottom: 5px; margin-bottom: 10px; }
-            h2 { margin: 2px 0; text-transform: uppercase; font-size: 14px; }
+            .header { border-bottom: 2px solid #000; padding: 10px; margin-bottom: 10px; text-align: center; }
+            h2 { margin: 2px 0; text-transform: uppercase; font-size: 14px; text-align: center; }
             .info { text-align: left; margin-bottom: 10px; font-size: 10px; }
             .specs-title { 
                 background: #000; 
@@ -535,14 +552,15 @@ function App() {
           <div class="info">
             <div>ORDER: <strong>${ord.order_code}</strong></div>
             <div>CUST : <strong>${ord.customer_name}</strong></div>
-            <div>ITEM : <strong style="text-transform: uppercase;">${m.type || 'Custom'}</strong></div>
+            <div>ITEMS: <strong style="text-transform: uppercase;">${sets.map(set => set.type || 'Custom').join(', ')}</strong></div>
             <div>DATE : ${new Date().toLocaleDateString()}</div>
           </div>
 
-          <div class="specs-title">Measurements (Inches)</div>
+          ${sets.map((set, idx) => `
+          <div class="specs-title">Measurements (Inches) - ${set.type ? set.type.toUpperCase() : 'CUSTOM'}</div>
           
           <div style="text-align: left;">
-            ${Object.entries(m)
+            ${Object.entries(set)
                 .filter(([k, v]) => k !== 'notes' && k !== 'type' && v)
                 .map(([k, v]) => `
                 <div class="spec-row">
@@ -552,7 +570,8 @@ function App() {
                 `).join('')}
           </div>
 
-          ${m.notes ? `<div class="notes"><strong>WORKSHOP NOTES:</strong><br/>${m.notes}</div>` : ''}
+          ${set.notes ? `<div class="notes"><strong>WORKSHOP NOTES:</strong><br/>${set.notes}</div>` : ''}
+          `).join('')}
 
           <div class="footer">
             Style: ${ord.style_name || 'Custom'}<br/>
@@ -572,8 +591,8 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 0; }
-            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
+            @page { size: 72mm auto; margin: 0; }
+            body { box-sizing: border-box; font-family: 'Courier New', monospace; padding: 0 0 10px 0; text-align: left; width: 72mm; margin: 0; font-size: 12px; }
             .header-info { margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 8px; }
             h2 { margin: 5px 0; font-size: 14px; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
@@ -614,11 +633,10 @@ function App() {
       <html>
         <head>
           <style>
-            @page { margin: 0; }
-            body { font-family: 'Courier New', monospace; padding: 10px; text-align: center; width: 280px; margin: auto; font-size: 12px; }
-            .header-info { margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 8px; }
-            h2 { margin: 5px 0; font-size: 14px; }
-            .voucher-title { font-size: 12px; font-weight: bold; background: #000; color: #fff; padding: 4px; margin-bottom: 10px; }
+            @page { size: 72mm auto; margin: 0; }
+            body { box-sizing: border-box; font-family: 'Courier New', monospace; padding: 0 0 10px 0; text-align: left; width: 72mm; margin: 0; font-size: 12px; }
+            .header-info { margin-bottom: 10px; border-bottom: 1px dashed #000; padding: 10px; text-align: center; }
+            h2 { margin: 5px 0; font-size: 14px; text-align: center; }
             .details { text-align: left; font-size: 11px; margin-bottom: 10px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
             .amount-box { border: 2px double #000; padding: 10px; font-size: 16px; font-weight: bold; margin: 10px 0; }
@@ -668,6 +686,9 @@ function App() {
                             setView('hub');
                         }
                         else showToast(res.message, 'error');
+                    } catch (err) {
+                        console.error('Login Error:', err);
+                        showToast(`Authentication Failed: ${err.message || 'Network Error'}`, 'error');
                     } finally {
                         setProcessing(false);
                     }
@@ -852,7 +873,8 @@ function App() {
                                 <label className="label">Payment Mode</label>
                                 <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
                                     <button className={`btn`} style={{ flex: 1, background: paymentMode === 'Cash' ? '#22c55e' : '#f1f5f9', color: paymentMode === 'Cash' ? 'white' : 'black' }} onClick={() => setPaymentMode('Cash')}>CASH</button>
-                                    <button className={`btn`} style={{ flex: 1, background: paymentMode === 'M-Pesa' ? '#2563eb' : '#f1f5f9', color: paymentMode === 'M-Pesa' ? 'white' : 'black' }} onClick={() => setPaymentMode('M-Pesa')}>M-PESA</button>
+                                    <button className={`btn`} style={{ flex: 1, background: paymentMode === 'M-Pesa' ? '#2563eb' : '#f1f5f9', color: paymentMode === 'M-Pesa' ? 'white' : 'black' }} onClick={() => setPaymentMode('M-Pesa')}>M-PESA (OFFLINE)</button>
+                                    <button className={`btn`} style={{ flex: 1, background: paymentMode === 'M-Pesa-STK' ? '#10b981' : '#f1f5f9', color: paymentMode === 'M-Pesa-STK' ? 'white' : 'black' }} onClick={() => setPaymentMode('M-Pesa-STK')}>M-PESA (STK)</button>
                                 </div>
                                 {paymentMode === 'M-Pesa' && (
                                     <div className="form-group">
@@ -861,6 +883,27 @@ function App() {
                                             onChange={e => setMpesaCode(e.target.value)}
                                             onKeyDown={e => e.key === 'Enter' && handleProcess()}
                                             placeholder="Type code..." />
+                                    </div>
+                                )}
+                                {paymentMode === 'M-Pesa-STK' && (
+                                    <div className="form-group">
+                                        <label className="label">Customer Phone (254...)</label>
+                                        <input 
+                                            placeholder="254..." 
+                                            defaultValue="" 
+                                            id="pos_stk_phone"
+                                            style={{ marginBottom: '10px' }}
+                                        />
+                                        <button 
+                                            className="btn" 
+                                            style={{ width: '100%', background: '#10b981', color: 'white' }}
+                                            onClick={() => {
+                                                const phone = document.getElementById('pos_stk_phone').value;
+                                                triggerSTKPush(total, phone);
+                                            }}
+                                        >
+                                            📲 Send STK Push (Ksh {total})
+                                        </button>
                                     </div>
                                 )}
                             </div>
@@ -1091,13 +1134,31 @@ function App() {
                                     <select name="payment_mode_service" className="input" style={{ width: '100%', marginBottom: '10px' }} onChange={(e) => {
                                         const mpesaField = document.getElementById('mpesa-field-service');
                                         if (mpesaField) mpesaField.style.display = e.target.value === 'M-Pesa' ? 'block' : 'none';
+                                        const stkBtn = document.getElementById('stk-btn-service');
+                                        if (stkBtn) stkBtn.style.display = e.target.value === 'M-Pesa-STK' ? 'block' : 'none';
                                     }}>
                                         <option value="Cash">Cash</option>
-                                        <option value="M-Pesa">M-Pesa</option>
+                                        <option value="M-Pesa">M-Pesa (Offline)</option>
+                                        <option value="M-Pesa-STK">M-Pesa (STK Push)</option>
                                     </select>
                                     <div id="mpesa-field-service" style={{ display: 'none' }}>
                                         <label className="label">M-Pesa Code</label>
                                         <input name="mpesa_code_service" placeholder="RX..." />
+                                    </div>
+                                    <div id="stk-btn-service" style={{ display: 'none' }}>
+                                        <button 
+                                            type="button" 
+                                            className="btn" 
+                                            style={{ background: '#10b981', color: 'white', width: '100%' }}
+                                            onClick={(e) => {
+                                                const form = e.target.closest('form');
+                                                const amount = form.paid_amount.value;
+                                                const phone = form.customer_phone.value;
+                                                triggerSTKPush(amount, phone);
+                                            }}
+                                        >
+                                            📲 Request STK Push
+                                        </button>
                                     </div>
                                 </div>
 
@@ -1200,16 +1261,32 @@ function App() {
                                     <select name="payment_mode" className="input" style={{ width: '100%' }} onChange={(e) => {
                                         const el = document.getElementById('modal_mpesa_code');
                                         if (el) el.style.display = e.target.value === 'M-Pesa' ? 'block' : 'none';
+                                        const stk = document.getElementById('modal_stk_btn_service');
+                                        if (stk) stk.style.display = e.target.value === 'M-Pesa-STK' ? 'block' : 'none';
                                         const req = document.getElementById('modal_mpesa_input');
                                         if (req) req.required = e.target.value === 'M-Pesa';
                                     }}>
                                         <option value="Cash">Cash</option>
-                                        <option value="M-Pesa">M-Pesa</option>
+                                        <option value="M-Pesa">M-Pesa (Offline)</option>
+                                        <option value="M-Pesa-STK">M-Pesa (STK Push)</option>
                                     </select>
                                 </div>
                                 <div id="modal_mpesa_code" style={{ display: 'none', marginBottom: '15px' }}>
                                     <label className="label">M-Pesa Code</label>
                                     <input id="modal_mpesa_input" name="mpesa_code" placeholder="Confirmation Code" />
+                                </div>
+                                <div id="modal_stk_btn_service" style={{ display: 'none', marginBottom: '15px' }}>
+                                    <button 
+                                        type="button" 
+                                        className="btn" 
+                                        style={{ background: '#10b981', color: 'white', width: '100%' }}
+                                        onClick={(e) => {
+                                            const form = e.target.closest('form');
+                                            triggerSTKPush(form.amount.value, servicePayment.customer_phone);
+                                        }}
+                                    >
+                                        📲 Send STK Push
+                                    </button>
                                 </div>
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <button type="submit" className="btn btn-success" style={{ flex: 1 }}>Confirm Payment</button>
@@ -1361,13 +1438,31 @@ function App() {
                                     <select name="payment_mode_fit" className="input" style={{ width: '100%', marginBottom: '10px' }} onChange={(e) => {
                                         const mpesaField = document.getElementById('mpesa-field-fit');
                                         if (mpesaField) mpesaField.style.display = e.target.value === 'M-Pesa' ? 'block' : 'none';
+                                        const stkBtn = document.getElementById('stk-btn-fit');
+                                        if (stkBtn) stkBtn.style.display = e.target.value === 'M-Pesa-STK' ? 'block' : 'none';
                                     }}>
                                         <option value="Cash">Cash</option>
-                                        <option value="M-Pesa">M-Pesa</option>
+                                        <option value="M-Pesa">M-Pesa (Offline)</option>
+                                        <option value="M-Pesa-STK">M-Pesa (STK Push)</option>
                                     </select>
                                     <div id="mpesa-field-fit" style={{ display: 'none' }}>
                                         <label className="label">M-Pesa Code</label>
                                         <input name="mpesa_code_fit" />
+                                    </div>
+                                    <div id="stk-btn-fit" style={{ display: 'none' }}>
+                                        <button 
+                                            type="button" 
+                                            className="btn" 
+                                            style={{ background: '#10b981', color: 'white', width: '100%' }}
+                                            onClick={(e) => {
+                                                const form = e.target.closest('form');
+                                                const amount = form.paid_amount.value;
+                                                const phone = form.customer_phone.value;
+                                                triggerSTKPush(amount, phone);
+                                            }}
+                                        >
+                                            📲 Request STK Push
+                                        </button>
                                     </div>
                                 </div>
                                 <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>Create Plan</button>
@@ -1447,16 +1542,32 @@ function App() {
                                     <select name="payment_mode" className="input" style={{ width: '100%' }} onChange={(e) => {
                                         const el = document.getElementById('fit_mpesa_code');
                                         if (el) el.style.display = e.target.value === 'M-Pesa' ? 'block' : 'none';
+                                        const stk = document.getElementById('fit_stk_btn_modal');
+                                        if (stk) stk.style.display = e.target.value === 'M-Pesa-STK' ? 'block' : 'none';
                                         const req = document.getElementById('fit_mpesa_input');
                                         if (req) req.required = e.target.value === 'M-Pesa';
                                     }}>
                                         <option value="Cash">Cash</option>
-                                        <option value="M-Pesa">M-Pesa</option>
+                                        <option value="M-Pesa">M-Pesa (Offline)</option>
+                                        <option value="M-Pesa-STK">M-Pesa (STK Push)</option>
                                     </select>
                                 </div>
                                 <div id="fit_mpesa_code" style={{ display: 'none', marginBottom: '15px' }}>
                                     <label className="label">M-Pesa Code</label>
                                     <input id="fit_mpesa_input" name="mpesa_code" placeholder="Confirmation Code" />
+                                </div>
+                                <div id="fit_stk_btn_modal" style={{ display: 'none', marginBottom: '15px' }}>
+                                    <button 
+                                        type="button" 
+                                        className="btn" 
+                                        style={{ background: '#10b981', color: 'white', width: '100%' }}
+                                        onClick={(e) => {
+                                            const form = e.target.closest('form');
+                                            triggerSTKPush(form.amount.value, fittingPayment.customer_phone);
+                                        }}
+                                    >
+                                        📲 Send STK Push
+                                    </button>
                                 </div>
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <button type="submit" className="btn btn-success" style={{ flex: 1 }}>Confirm Payment</button>
@@ -1509,8 +1620,7 @@ function App() {
                 };
                 const res = await window.api.addExpense(expenseData);
                 if (res.success) {
-                    showToast('Expense recorded! Printing Voucher...', 'success');
-                    await printExpenseReceipt(expenseData);
+                    showToast('Expense recorded successfully.', 'success');
                     e.target.reset();
                     await loadData();
                 } else showToast(res.message, 'error');
