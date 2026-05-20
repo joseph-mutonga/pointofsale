@@ -30,6 +30,9 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
     const [printers, setPrinters] = useState([]);
     const [galleryItems, setGalleryItems] = useState([]);
     const [galleryEdit, setGalleryEdit] = useState(null);
+    const [workerTasks, setWorkerTasks] = useState([]);
+    const [assignableTasks, setAssignableTasks] = useState({ services: [], tailoring: [] });
+    const [workerLoginEdit, setWorkerLoginEdit] = useState(null);
 
     const [selectedSale, setSelectedSale] = useState(null);
     const [saleItems, setSaleItems] = useState([]);
@@ -85,9 +88,13 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                 const wf = await window.api.getWorkforce();
                 const pl = await window.api.getProductionLogs();
                 const wp = await window.api.getWorkforcePayments();
+                const wt = await window.api.getWorkerTasks();
+                const at = await window.api.getAssignableTasks();
                 setWorkforce(wf || []);
                 setProductionLogs(pl || []);
                 setWorkforcePayments(wp || []);
+                setWorkerTasks(wt || []);
+                setAssignableTasks(at || { services: [], tailoring: [] });
             } else if (view === 'gallery') {
                 const res = await window.api.getGallery();
                 setGalleryItems(res || []);
@@ -1558,19 +1565,25 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                         <button type="submit" className="btn btn-primary">+ Add Staff</button>
                                     </form>
                                     <table>
-                                        <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Joined</th><th>Action</th></tr></thead>
+                                        <thead><tr><th>Name</th><th>Role</th><th>Username</th><th>Status</th><th>Joined</th><th>Action</th></tr></thead>
                                         <tbody>
                                             {workforce.map(w => (
                                                 <tr key={w.id}>
                                                     <td style={{ fontWeight: 'bold' }}>{w.name}</td>
                                                     <td>{w.role}</td>
                                                     <td>
+                                                        <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: w.username ? '#0369a1' : '#94a3b8' }}>
+                                                            {w.username || <em>not set</em>}
+                                                        </span>
+                                                    </td>
+                                                    <td>
                                                         <span style={{ padding: '2px 8px', borderRadius: '10px', background: w.status === 'active' ? '#dcfce7' : '#fee2e2', color: w.status === 'active' ? '#166534' : '#991b1b', fontSize: '0.75rem', fontWeight: 'bold' }}>
                                                             {w.status.toUpperCase()}
                                                         </span>
                                                     </td>
                                                     <td>{new Date(w.created_at).toLocaleDateString()}</td>
-                                                    <td>
+                                                    <td style={{ display: 'flex', gap: '5px' }}>
+                                                        <button className="btn" style={{ background: '#0ea5e9', color: 'white', fontSize: '0.75rem', padding: '3px 8px' }} onClick={() => setWorkerLoginEdit(w)}>🔑 Login</button>
                                                         <button className="btn btn-danger" onClick={() => {
                                                             showConfirm('Remove this staff member?', async () => {
                                                                 setProcessing(true);
@@ -1590,9 +1603,133 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                                     </td>
                                                 </tr>
                                             ))}
-                                            {workforce.length === 0 && <tr><td colSpan="5" style={{ textAlign: 'center', padding: '20px' }}>No staff members recorded.</td></tr>}
+                                            {workforce.length === 0 && <tr><td colSpan="6" style={{ textAlign: 'center', padding: '20px' }}>No staff members recorded.</td></tr>}
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+
+                            {/* Task Assignment */}
+                            <div className="card" style={{ marginBottom: '20px' }}>
+                                <div className="card-header" style={{ background: '#1e3a5f', color: 'white' }}>📋 Assign Tasks to Workers</div>
+                                <div className="card-body">
+                                    <form onSubmit={async (e) => {
+                                        e.preventDefault();
+                                        const fd = new FormData(e.target);
+                                        const workerId = fd.get('assign_worker_id');
+                                        const taskType = fd.get('task_type');
+                                        const taskId = fd.get('task_id');
+                                        const notes = fd.get('assign_notes');
+                                        if (!workerId || !taskId) { showToast('Select both a worker and a task', 'error'); return; }
+                                        const worker = workforce.find(w => w.id == workerId);
+                                        const allTasks = taskType === 'service' ? assignableTasks.services : assignableTasks.tailoring;
+                                        const task = allTasks.find(t => t.id == taskId);
+                                        setProcessing(true);
+                                        try {
+                                            const res = await window.api.assignTask({
+                                                worker_id: Number(workerId),
+                                                worker_name: worker?.name,
+                                                task_type: taskType,
+                                                task_id: Number(taskId),
+                                                task_code: task?.code,
+                                                task_description: task?.description,
+                                                assigned_by: user.full_name,
+                                                notes
+                                            });
+                                            if (res.success) {
+                                                showToast('Task assigned successfully', 'success');
+                                                e.target.reset();
+                                                await loadAll();
+                                            } else showToast(res.message, 'error');
+                                        } finally { setProcessing(false); }
+                                    }} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr auto', gap: '10px', alignItems: 'end', background: '#f0f9ff', padding: '15px', borderRadius: '8px', marginBottom: '20px' }}>
+                                        <div>
+                                            <label className="label">Worker</label>
+                                            <select name="assign_worker_id" className="input" required>
+                                                <option value="">-- Select Worker --</option>
+                                                {workforce.filter(w => w.status === 'active').map(w => <option key={w.id} value={w.id}>{w.name} ({w.role})</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="label">Task Type</label>
+                                            <select name="task_type" className="input" required defaultValue="service">
+                                                <option value="service">Service Intake</option>
+                                                <option value="tailoring">Custom Tailoring</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="label">Task (Code — Customer)</label>
+                                            <select name="task_id" className="input" required>
+                                                <option value="">-- Select Task --</option>
+                                                <optgroup label="Service Tasks">
+                                                    {assignableTasks.services.map(t => <option key={t.id} value={t.id}>{t.code} — {t.description}</option>)}
+                                                </optgroup>
+                                                <optgroup label="Tailoring Orders">
+                                                    {assignableTasks.tailoring.map(t => <option key={t.id} value={t.id}>{t.code} — {t.description}</option>)}
+                                                </optgroup>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="label">Notes (optional)</label>
+                                            <input name="assign_notes" placeholder="Special instructions..." />
+                                        </div>
+                                        <button type="submit" className="btn btn-primary" style={{ height: '38px' }}>Assign</button>
+                                    </form>
+
+                                    {/* All Assignments Table */}
+                                    <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                                        <table style={{ fontSize: '0.875rem' }}>
+                                            <thead>
+                                                <tr>
+                                                    <th>Worker</th>
+                                                    <th>Task Code</th>
+                                                    <th>Type</th>
+                                                    <th>Description</th>
+                                                    <th>Status</th>
+                                                    <th>Assigned</th>
+                                                    <th>Notes</th>
+                                                    <th>Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {workerTasks.map(t => (
+                                                    <tr key={t.id} style={{ opacity: t.status === 'completed' ? 0.6 : 1 }}>
+                                                        <td style={{ fontWeight: '600' }}>{t.worker_name}</td>
+                                                        <td style={{ fontFamily: 'monospace', color: '#0369a1', fontWeight: 'bold' }}>{t.task_code}</td>
+                                                        <td>
+                                                            <span style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', background: t.task_type === 'service' ? '#dcfce7' : '#ede9fe', color: t.task_type === 'service' ? '#166534' : '#6d28d9' }}>
+                                                                {t.task_type === 'service' ? 'SERVICE' : 'TAILORING'}
+                                                            </span>
+                                                        </td>
+                                                        <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task_description}</td>
+                                                        <td>
+                                                            <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '0.75rem', fontWeight: 'bold',
+                                                                background: t.status === 'completed' ? '#dcfce7' : t.status === 'in_progress' ? '#fef9c3' : '#dbeafe',
+                                                                color: t.status === 'completed' ? '#166534' : t.status === 'in_progress' ? '#854d0e' : '#1e40af'
+                                                            }}>
+                                                                {t.status === 'in_progress' ? 'IN PROGRESS' : t.status.toUpperCase()}
+                                                            </span>
+                                                        </td>
+                                                        <td style={{ fontSize: '0.75rem', color: '#64748b' }}>{new Date(t.assigned_at).toLocaleDateString()}</td>
+                                                        <td style={{ fontSize: '0.75rem', color: '#64748b' }}>{t.notes || '—'}</td>
+                                                        <td>
+                                                            <button className="btn btn-danger" style={{ padding: '2px 6px', fontSize: '0.7rem' }} onClick={() => {
+                                                                showConfirm('Remove this task assignment?', async () => {
+                                                                    setProcessing(true);
+                                                                    try {
+                                                                        const res = await window.api.unassignTask(t.id);
+                                                                        if (res.success) { showToast('Assignment removed', 'success'); await loadAll(); }
+                                                                        else showToast(res.message, 'error');
+                                                                    } finally { setProcessing(false); }
+                                                                });
+                                                            }}>Unassign</button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {workerTasks.length === 0 && <tr><td colSpan="8" style={{ textAlign: 'center', padding: '20px', color: '#94a3b8' }}>No tasks assigned yet.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
                             </div>
 
@@ -2447,9 +2584,48 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                     transition: 'all 0.2s'
                                 }}
                             >
-                                Confirm
-                            </button>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Set Worker Login Modal */}
+            {workerLoginEdit && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: 'white', borderRadius: '12px', padding: '30px', width: '400px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+                        <h3 style={{ margin: '0 0 6px 0', color: '#0369a1' }}>🔑 Set Worker Login</h3>
+                        <p style={{ margin: '0 0 20px 0', color: '#64748b', fontSize: '0.9rem' }}>Worker: <strong>{workerLoginEdit.name}</strong></p>
+                        <form onSubmit={async (e) => {
+                            e.preventDefault();
+                            const username = e.target.worker_username.value.trim();
+                            const password = e.target.worker_password.value;
+                            if (!username || !password) { showToast('Username and password are required', 'error'); return; }
+                            setProcessing(true);
+                            try {
+                                const res = await window.api.upsertWorker({ id: workerLoginEdit.id, username, password });
+                                if (res.success) {
+                                    showToast(`Login set for ${workerLoginEdit.name}`, 'success');
+                                    setWorkerLoginEdit(null);
+                                    await loadAll();
+                                } else showToast(res.message, 'error');
+                            } finally { setProcessing(false); }
+                        }}>
+                            <div className="form-group">
+                                <label className="label">Username</label>
+                                <input name="worker_username" defaultValue={workerLoginEdit.username || ''} placeholder="e.g. john_tailor" required style={{ width: '100%' }} />
+                            </div>
+                            <div className="form-group">
+                                <label className="label">Password</label>
+                                <input name="worker_password" type="password" placeholder="New password" required style={{ width: '100%' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                                <button type="button" className="btn" style={{ flex: 1 }} onClick={() => setWorkerLoginEdit(null)}>Cancel</button>
+                                <button type="submit" className="btn btn-primary" style={{ flex: 1, background: '#0369a1' }}>Save Login</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}

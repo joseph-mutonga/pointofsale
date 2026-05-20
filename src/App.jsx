@@ -42,6 +42,9 @@ function App() {
     const [processing, setProcessing] = useState(false);
     const [stkStatus, setStkStatus] = useState(null);
     const [base64Logo, setBase64Logo] = useState(logo);
+    const [loginMode, setLoginMode] = useState('staff'); // 'staff' | 'worker'
+    const [loggedInWorker, setLoggedInWorker] = useState(null);
+    const [workerTasks, setWorkerTasks] = useState([]);
 
     useEffect(() => {
         // Load high-reliability base64 logo for printing in production
@@ -667,7 +670,8 @@ function App() {
         return window.api.print(html);
     };
 
-    if (!user) {
+    if (!user && !loggedInWorker) {
+        const isWorker = loginMode === 'worker';
         return (
             <div className="login-screen">
                 {processing && (
@@ -676,38 +680,179 @@ function App() {
                         <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>Authenticating...</div>
                     </div>
                 )}
-                <form className="login-card" onSubmit={async (e) => {
-                    e.preventDefault();
-                    setProcessing(true);
-                    try {
-                        const res = await window.api.login(e.target.username.value, e.target.password.value);
-                        if (res.success) {
-                            setUser(res.user);
-                            setView('hub');
-                        }
-                        else showToast(res.message, 'error');
-                    } catch (err) {
-                        console.error('Login Error:', err);
-                        showToast(`Authentication Failed: ${err.message || 'Network Error'}`, 'error');
-                    } finally {
-                        setProcessing(false);
-                    }
-                }}>
-                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+
+                <div className="login-card" style={{ paddingTop: '24px' }}>
+                    <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
                         <img src={logo} style={{ width: '80px', height: '80px', borderRadius: '50%', marginBottom: '1rem' }} />
                         <h1 className="brand" style={{ margin: 0, fontSize: '2rem', textTransform: 'uppercase' }}>{settings.shop_name || 'EUNIKA COLLECTION'}</h1>
                         <p style={{ color: '#94a3b8', marginTop: '0.5rem' }}>Management & POS System</p>
                     </div>
-                    <div className="form-group">
-                        <label className="label">Username</label>
-                        <input name="username" placeholder="Enter username" required />
+
+                    {/* Tab Toggle */}
+                    <div style={{ display: 'flex', borderRadius: '10px', overflow: 'hidden', border: '1px solid #334155', marginBottom: '24px' }}>
+                        <button type="button"
+                            onClick={() => setLoginMode('staff')}
+                            style={{ flex: 1, padding: '10px', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '0.875rem', background: !isWorker ? '#3b82f6' : '#1e293b', color: !isWorker ? 'white' : '#94a3b8', transition: 'all 0.2s' }}>
+                            👔 Staff / Admin
+                        </button>
+                        <button type="button"
+                            onClick={() => setLoginMode('worker')}
+                            style={{ flex: 1, padding: '10px', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '0.875rem', background: isWorker ? '#10b981' : '#1e293b', color: isWorker ? 'white' : '#94a3b8', transition: 'all 0.2s' }}>
+                            🧵 Worker Portal
+                        </button>
                     </div>
-                    <div className="form-group">
-                        <label className="label">Password</label>
-                        <input name="password" type="password" placeholder="••••••••" required />
+
+                    {!isWorker ? (
+                        // --- Staff/Admin Login ---
+                        <form onSubmit={async (e) => {
+                            e.preventDefault();
+                            setProcessing(true);
+                            try {
+                                const res = await window.api.login(e.target.username.value, e.target.password.value);
+                                if (res.success) { setUser(res.user); setView('hub'); }
+                                else showToast(res.message, 'error');
+                            } catch (err) {
+                                showToast(`Authentication Failed: ${err.message || 'Network Error'}`, 'error');
+                            } finally { setProcessing(false); }
+                        }}>
+                            <div className="form-group">
+                                <label className="label">Username</label>
+                                <input name="username" placeholder="Enter username" required />
+                            </div>
+                            <div className="form-group">
+                                <label className="label">Password</label>
+                                <input name="password" type="password" placeholder="••••••••" required />
+                            </div>
+                            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px', marginTop: '16px' }}>Sign In</button>
+                        </form>
+                    ) : (
+                        // --- Worker Portal Login ---
+                        <form onSubmit={async (e) => {
+                            e.preventDefault();
+                            setProcessing(true);
+                            try {
+                                const res = await window.api.workerLogin(e.target.w_username.value, e.target.w_password.value);
+                                if (res.success) {
+                                    setLoggedInWorker(res.worker);
+                                    const tasks = await window.api.getWorkerTasks(res.worker.id);
+                                    setWorkerTasks(tasks || []);
+                                } else showToast(res.message, 'error');
+                            } catch (err) {
+                                showToast(`Login Failed: ${err.message || 'Network Error'}`, 'error');
+                            } finally { setProcessing(false); }
+                        }}>
+                            <div className="form-group">
+                                <label className="label">Worker Username</label>
+                                <input name="w_username" placeholder="Enter your username" required />
+                            </div>
+                            <div className="form-group">
+                                <label className="label">Password</label>
+                                <input name="w_password" type="password" placeholder="••••••••" required />
+                            </div>
+                            <button type="submit" className="btn" style={{ width: '100%', padding: '12px', marginTop: '16px', background: '#10b981', color: 'white', fontWeight: '700' }}>Enter Worker Portal</button>
+                        </form>
+                    )}
+                </div>
+
+                {toast && (
+                    <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 9999, backgroundColor: toast.type === 'error' ? '#ef4444' : '#22c55e', color: 'white', padding: '16px 24px', borderRadius: '8px', fontWeight: '600' }}>
+                        {toast.message}
                     </div>
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px', marginTop: '16px' }}>Sign In</button>
-                </form>
+                )}
+            </div>
+        );
+    }
+
+    // --- WORKER DASHBOARD ---
+    if (loggedInWorker) {
+        const statusColor = { assigned: '#dbeafe', in_progress: '#fef9c3', completed: '#dcfce7' };
+        const statusText = { assigned: '#1e40af', in_progress: '#854d0e', completed: '#166534' };
+        return (
+            <div className="app" style={{ minHeight: '100vh', background: '#0f172a' }}>
+                {processing && (<div className="processing-overlay"><div className="spinner"></div></div>)}
+                <header className="header" style={{ background: '#134e4a', borderBottom: '1px solid #0d9488' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '1.5rem' }}>🧵</span>
+                        <div>
+                            <div className="brand" style={{ color: '#5eead4', fontSize: '1rem' }}>WORKER PORTAL</div>
+                            <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>{loggedInWorker.name} — {loggedInWorker.role}</div>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <button className="btn" style={{ background: '#0f766e', color: 'white', fontSize: '0.85rem' }} onClick={async () => {
+                            setProcessing(true);
+                            const tasks = await window.api.getWorkerTasks(loggedInWorker.id);
+                            setWorkerTasks(tasks || []);
+                            setProcessing(false);
+                        }}>↻ Refresh</button>
+                        <button className="btn btn-danger" style={{ fontSize: '0.85rem' }} onClick={() => { setLoggedInWorker(null); setWorkerTasks([]); }}>Logout</button>
+                    </div>
+                </header>
+
+                <main style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
+                    <div className="card">
+                        <div className="card-header" style={{ background: '#134e4a', color: '#5eead4', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>📋 My Assigned Tasks</span>
+                            <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>{workerTasks.filter(t => t.status !== 'completed').length} active</span>
+                        </div>
+                        <div className="card-body">
+                            {workerTasks.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94a3b8' }}>
+                                    <div style={{ fontSize: '3rem', marginBottom: '12px' }}>✅</div>
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '600' }}>No tasks assigned yet</div>
+                                    <div style={{ fontSize: '0.85rem', marginTop: '6px' }}>Check back later or contact your admin</div>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {workerTasks.map(task => (
+                                        <div key={task.id} style={{ background: '#1e293b', borderRadius: '10px', padding: '16px 20px', border: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                                                    <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#38bdf8', fontSize: '1rem' }}>{task.task_code}</span>
+                                                    <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', background: task.task_type === 'service' ? '#dcfce7' : '#ede9fe', color: task.task_type === 'service' ? '#166534' : '#6d28d9' }}>
+                                                        {task.task_type === 'service' ? 'SERVICE' : 'TAILORING'}
+                                                    </span>
+                                                    <span style={{ padding: '2px 10px', borderRadius: '10px', fontSize: '0.75rem', fontWeight: 'bold', background: statusColor[task.status] || '#f1f5f9', color: statusText[task.status] || '#334155' }}>
+                                                        {task.status === 'in_progress' ? 'IN PROGRESS' : task.status.toUpperCase()}
+                                                    </span>
+                                                </div>
+                                                <div style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '4px' }}>{task.task_description}</div>
+                                                {task.notes && <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic' }}>📝 {task.notes}</div>}
+                                                <div style={{ color: '#475569', fontSize: '0.75rem', marginTop: '4px' }}>Assigned: {new Date(task.assigned_at).toLocaleDateString()} by {task.assigned_by}</div>
+                                            </div>
+                                            {task.status !== 'completed' && (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '140px' }}>
+                                                    {task.status === 'assigned' && (
+                                                        <button className="btn" style={{ background: '#ca8a04', color: 'white', fontSize: '0.8rem', padding: '6px 12px' }}
+                                                            onClick={async () => {
+                                                                setProcessing(true);
+                                                                const res = await window.api.updateTaskStatus({ id: task.id, status: 'in_progress' });
+                                                                if (res.success) { const t = await window.api.getWorkerTasks(loggedInWorker.id); setWorkerTasks(t || []); showToast('Status updated', 'success'); }
+                                                                setProcessing(false);
+                                                            }}>▶ Start Task</button>
+                                                    )}
+                                                    <button className="btn" style={{ background: '#16a34a', color: 'white', fontSize: '0.8rem', padding: '6px 12px' }}
+                                                        onClick={async () => {
+                                                            setProcessing(true);
+                                                            const res = await window.api.updateTaskStatus({ id: task.id, status: 'completed' });
+                                                            if (res.success) { const t = await window.api.getWorkerTasks(loggedInWorker.id); setWorkerTasks(t || []); showToast('Task marked complete!', 'success'); }
+                                                            setProcessing(false);
+                                                        }}>✔ Mark Complete</button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </main>
+
+                {toast && (
+                    <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 9999, backgroundColor: toast.type === 'error' ? '#ef4444' : '#22c55e', color: 'white', padding: '16px 24px', borderRadius: '8px', fontWeight: '600' }}>
+                        {toast.message}
+                    </div>
+                )}
             </div>
         );
     }

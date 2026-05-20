@@ -230,6 +230,22 @@ function initDb() {
       phone TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS worker_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      worker_id INTEGER NOT NULL,
+      worker_name TEXT,
+      task_type TEXT NOT NULL,
+      task_id INTEGER NOT NULL,
+      task_code TEXT,
+      task_description TEXT,
+      status TEXT DEFAULT 'assigned',
+      assigned_by TEXT,
+      notes TEXT,
+      assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(worker_id) REFERENCES workforce(id)
+    );
   `);
 
   // --- COLUMN MIGRATIONS ---
@@ -292,6 +308,8 @@ function initDb() {
   addCol('tailoring_orders', 'status', "TEXT DEFAULT 'pending'");
   addCol('expenses', 'mpesa_code', 'TEXT');
   addCol('workforce_payments', 'mpesa_code', 'TEXT');
+  addCol('workforce', 'username', 'TEXT');
+  addCol('workforce', 'password', 'TEXT');
 
 
   // --- SEEDING ---

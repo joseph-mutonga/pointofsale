@@ -443,16 +443,96 @@ ipcMain.handle('update-fitting-payment', (_, data) => {
 });
 
 // workforce
-ipcMain.handle('get-workforce', () => db.prepare('SELECT * FROM workforce ORDER BY name ASC').all());
+ipcMain.handle('get-workforce', () => db.prepare('SELECT id, name, role, status, username, created_at FROM workforce ORDER BY name ASC').all());
 ipcMain.handle('add-worker', (_, data) => {
     try {
         db.prepare('INSERT INTO workforce (name, role) VALUES (?, ?)').run(data.name, data.role);
         return { success: true };
     } catch (e) { return { success: false, message: e.message }; }
 });
+ipcMain.handle('upsert-worker', (_, data) => {
+    try {
+        if (!data.username) return { success: false, message: 'Username is required' };
+        // Check username not already taken by another worker
+        const existing = db.prepare('SELECT id FROM workforce WHERE username = ? AND id != ?').get(data.username, data.id || 0);
+        if (existing) return { success: false, message: 'Username already taken by another worker' };
+        if (data.password) {
+            const hash = crypto.createHash('sha256').update(data.password).digest('hex');
+            db.prepare('UPDATE workforce SET username = ?, password = ? WHERE id = ?').run(data.username, hash, data.id);
+        } else {
+            db.prepare('UPDATE workforce SET username = ? WHERE id = ?').run(data.username, data.id);
+        }
+        return { success: true };
+    } catch (e) { return { success: false, message: e.message }; }
+});
+ipcMain.handle('worker-login', (_, username, password) => {
+    try {
+        const hash = crypto.createHash('sha256').update(password).digest('hex');
+        const worker = db.prepare('SELECT id, name, role, status, username FROM workforce WHERE username = ? AND password = ?').get(username, hash);
+        if (!worker) return { success: false, message: 'Invalid credentials' };
+        if (worker.status !== 'active') return { success: false, message: 'Account is disabled' };
+        return { success: true, worker };
+    } catch (e) { return { success: false, message: e.message }; }
+});
 ipcMain.handle('delete-worker', (_, id) => {
     try {
         db.prepare('DELETE FROM workforce WHERE id = ?').run(id);
+        return { success: true };
+    } catch (e) { return { success: false, message: e.message }; }
+});
+
+// worker tasks
+ipcMain.handle('get-assignable-tasks', () => {
+    try {
+        const services = db.prepare(`
+            SELECT id, 'service' as task_type, service_code as code,
+                customer_name || ' — ' || item_description as description,
+                status, created_at
+            FROM services WHERE status NOT IN ('collected') ORDER BY created_at DESC
+        `).all();
+        const tailoring = db.prepare(`
+            SELECT id, 'tailoring' as task_type, order_code as code,
+                customer_name || ' — Tailoring Order' as description,
+                status, created_at, deadline
+            FROM tailoring_orders WHERE status NOT IN ('collected') ORDER BY created_at DESC
+        `).all();
+        return { services, tailoring };
+    } catch (e) { return { services: [], tailoring: [] }; }
+});
+ipcMain.handle('assign-task', (_, data) => {
+    try {
+        // Prevent duplicate assignments (same worker + task)
+        const dupe = db.prepare(
+            'SELECT id FROM worker_tasks WHERE worker_id = ? AND task_type = ? AND task_id = ? AND status != ?'
+        ).get(data.worker_id, data.task_type, data.task_id, 'completed');
+        if (dupe) return { success: false, message: 'This task is already assigned to this worker' };
+        db.prepare(`
+            INSERT INTO worker_tasks (worker_id, worker_name, task_type, task_id, task_code, task_description, assigned_by, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(data.worker_id, data.worker_name, data.task_type, data.task_id, data.task_code, data.task_description, data.assigned_by, data.notes || null);
+        return { success: true };
+    } catch (e) { return { success: false, message: e.message }; }
+});
+ipcMain.handle('get-worker-tasks', (_, workerId) => {
+    try {
+        const sql = workerId
+            ? 'SELECT * FROM worker_tasks WHERE worker_id = ? ORDER BY assigned_at DESC'
+            : 'SELECT * FROM worker_tasks ORDER BY assigned_at DESC';
+        return workerId
+            ? db.prepare(sql).all(workerId)
+            : db.prepare(sql).all();
+    } catch (e) { return []; }
+});
+ipcMain.handle('update-task-status', (_, data) => {
+    try {
+        db.prepare('UPDATE worker_tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(data.status, data.id);
+        return { success: true };
+    } catch (e) { return { success: false, message: e.message }; }
+});
+ipcMain.handle('unassign-task', (_, id) => {
+    try {
+        db.prepare('DELETE FROM worker_tasks WHERE id = ?').run(id);
         return { success: true };
     } catch (e) { return { success: false, message: e.message }; }
 });
