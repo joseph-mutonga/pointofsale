@@ -598,6 +598,26 @@ app.get('/api/workforce', (req, res) => {
   }
 });
 
+app.post('/api/workforce', (req, res) => {
+  try {
+    const { name, role } = req.body;
+    db.prepare('INSERT INTO workforce (name, role, status) VALUES (?, ?, ?)')
+      .run(name, role, 'active');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/workforce/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM workforce WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.get('/api/production-logs', (req, res) => {
   try {
     res.json(dbAll('SELECT * FROM production_logs ORDER BY created_at DESC'));
@@ -630,6 +650,95 @@ app.post('/api/workforce-payments', (req, res) => {
     const { worker_id, worker_name, amount, payment_mode, notes, mpesa_code } = req.body;
     db.prepare('INSERT INTO workforce_payments (worker_id, worker_name, amount, payment_mode, notes, mpesa_code) VALUES (?, ?, ?, ?, ?, ?)')
       .run(worker_id, worker_name, amount, payment_mode || 'Cash', notes, mpesa_code || null);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- WORKER AUTH ---
+app.post('/api/workforce/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const hash = crypto.createHash('sha256').update(password).digest('hex');
+    const user = dbGet('SELECT * FROM workforce WHERE username = ? AND password = ?', [username, hash]);
+    if (user) {
+      if (user.status !== 'active') return res.status(403).json({ success: false, message: 'Account disabled' });
+      return res.json({ success: true, worker: { id: user.id, username: user.username, role: user.role, name: user.name } });
+    }
+    res.status(401).json({ success: false, message: 'Invalid credentials' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.patch('/api/workforce/:id/credentials', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ success: false, message: 'Username and password required' });
+    const hash = crypto.createHash('sha256').update(password).digest('hex');
+    db.prepare('UPDATE workforce SET username = ?, password = ? WHERE id = ?').run(username, hash, id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- WORKER TASKS ---
+app.get('/api/worker-tasks/assignable', (req, res) => {
+  try {
+    const services = dbAll("SELECT id, service_code as code, (item_description || ' (' || customer_name || ')') as description FROM services WHERE status != 'collected'");
+    const tailoring = dbAll("SELECT t.id, t.order_code as code, (COALESCE(g.title, 'Custom') || ' (' || t.customer_name || ')') as description FROM tailoring_orders t LEFT JOIN gallery g ON t.style_id = g.id WHERE t.status != 'collected'");
+    res.json({ services: services || [], tailoring: tailoring || [] });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get('/api/worker-tasks', (req, res) => {
+  try {
+    const { worker_id } = req.query;
+    let query = 'SELECT * FROM worker_tasks';
+    let params = [];
+    if (worker_id) {
+        query += ' WHERE worker_id = ?';
+        params.push(worker_id);
+    }
+    query += ' ORDER BY created_at DESC';
+    res.json(dbAll(query, params));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.post('/api/worker-tasks', (req, res) => {
+  try {
+    const { worker_id, worker_name, task_type, task_id, task_code, task_description, assigned_by, notes } = req.body;
+    db.prepare(`
+      INSERT INTO worker_tasks (worker_id, worker_name, task_type, reference_id, task_code, task_description, assigned_by, notes, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'assigned')
+    `).run(worker_id, worker_name, task_type, task_id, task_code, task_description, assigned_by, notes || null);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.patch('/api/worker-tasks/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    db.prepare('UPDATE worker_tasks SET status = ? WHERE id = ?').run(status, id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/worker-tasks/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM worker_tasks WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

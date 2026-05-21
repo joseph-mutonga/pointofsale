@@ -166,9 +166,29 @@ async function migrate() {
         CREATE TABLE IF NOT EXISTS workforce (
           id INT PRIMARY KEY AUTO_INCREMENT,
           name VARCHAR(255) NOT NULL,
+          username VARCHAR(255) UNIQUE,
+          password TEXT,
           role VARCHAR(255),
           status VARCHAR(50) DEFAULT 'active',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `
+    },
+    {
+      name: 'worker_tasks',
+      schema: `
+        CREATE TABLE IF NOT EXISTS worker_tasks (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            worker_id INT,
+            worker_name VARCHAR(255),
+            task_type VARCHAR(50), 
+            reference_id INT,
+            task_code VARCHAR(255),
+            task_description TEXT,
+            status VARCHAR(50) DEFAULT 'assigned',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT,
+            assigned_by VARCHAR(255)
         )
       `
     },

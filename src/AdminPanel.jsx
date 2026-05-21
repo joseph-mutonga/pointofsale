@@ -2205,6 +2205,56 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
             }
 
             {
+                workerLoginEdit && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                        <div className="card" style={{ width: '400px', background: 'white', padding: '24px' }}>
+                            <h2 style={{ marginBottom: '20px' }}>Set Credentials: {workerLoginEdit.name}</h2>
+                            <form onSubmit={async (e) => {
+                                e.preventDefault();
+                                const fd = new FormData(e.target);
+                                setProcessing(true);
+                                try {
+                                    const res = await fetch(`http://localhost:5001/api/workforce/${workerLoginEdit.id}/credentials`, {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            username: fd.get('username'),
+                                            password: fd.get('password')
+                                        })
+                                    });
+                                    const data = await res.json();
+                                    if (data.success) {
+                                        if (showToast) showToast('Credentials updated successfully', 'success');
+                                        setWorkerLoginEdit(null);
+                                        await loadAll();
+                                    } else {
+                                        if (showToast) showToast(data.message || 'Failed to update credentials', 'error');
+                                    }
+                                } catch (err) {
+                                    if (showToast) showToast('Error updating credentials', 'error');
+                                } finally {
+                                    setProcessing(false);
+                                }
+                            }}>
+                                <div className="form-group">
+                                    <label className="label">Username</label>
+                                    <input name="username" defaultValue={workerLoginEdit.username || ''} required placeholder="e.g. jdoe" />
+                                </div>
+                                <div className="form-group">
+                                    <label className="label">Password</label>
+                                    <input name="password" type="password" required placeholder="Enter new password" />
+                                </div>
+                                <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                                    <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Save Credentials</button>
+                                    <button type="button" className="btn btn-danger" style={{ flex: 1 }} onClick={() => setWorkerLoginEdit(null)}>Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )
+            }
+
+            {
                 selectedSale && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
                         <div className="card" style={{ width: '500px', background: 'white', padding: '24px', position: 'relative', overflow: 'hidden' }}>
