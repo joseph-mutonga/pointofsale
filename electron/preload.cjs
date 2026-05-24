@@ -57,5 +57,7 @@ contextBridge.exposeInMainWorld('api', {
     getSettings: () => ipcRenderer.invoke('get-settings'),
     updateSettings: (data) => ipcRenderer.invoke('update-settings', data),
     getPrinters: () => ipcRenderer.invoke('get-printers'),
-    print: (html) => ipcRenderer.invoke('print', html)
+    print: (html) => ipcRenderer.invoke('print', html),
+    getUnclaimedMpesa: () => ipcRenderer.invoke('get-unclaimed-mpesa'),
+    claimMpesaPayment: (code) => ipcRenderer.invoke('claim-mpesa-payment', code)
 });

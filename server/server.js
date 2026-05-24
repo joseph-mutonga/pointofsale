@@ -42,18 +42,52 @@ app.post('/api/login', (req, res) => {
 });
 
 // --- MPESA ---
-app.post('/api/mpesa/stkpush', async (req, res) => {
+app.post('/api/payments/stkpush', async (req, res) => {
   try {
     const { amount, phone, reference, description } = req.body;
     const result = await stkPush(amount, phone, reference, description);
+    
+    // Create pending record to track status
+    if (result.CheckoutRequestID) {
+      db.prepare(`
+        INSERT INTO mpesa_transactions (checkout_request_id, merchant_request_id, result_code, result_desc, amount, phone, transaction_date)
+        VALUES (?, ?, -1, 'Pending Payment', ?, ?, datetime('now'))
+        ON CONFLICT(checkout_request_id) DO NOTHING
+      `).run(result.CheckoutRequestID, result.MerchantRequestID || null, amount, phone);
+    }
+    
     res.json({ success: true, result });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
+// STK Push Status Polling
+app.get('/api/payments/status/:checkoutRequestId', (req, res) => {
+  try {
+    const { checkoutRequestId } = req.params;
+    const record = db.prepare('SELECT result_code, result_desc, mpesa_receipt, amount FROM mpesa_transactions WHERE checkout_request_id = ?').get(checkoutRequestId);
+    
+    if (!record) {
+      return res.json({ success: true, status: 'not_found' });
+    }
+    
+    if (record.result_code === -1) {
+      return res.json({ success: true, status: 'pending', description: record.result_desc });
+    }
+    
+    if (record.result_code === 0) {
+      return res.json({ success: true, status: 'success', receipt: record.mpesa_receipt, amount: record.amount, description: record.result_desc });
+    }
+    
+    return res.json({ success: true, status: 'failed', description: record.result_desc });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // STK Push Callback
-app.post('/api/mpesa/callback', (req, res) => {
+app.post('/api/payments/callback', (req, res) => {
   try {
     const { Body } = req.body;
     console.log('M-Pesa Callback Received:', JSON.stringify(req.body, null, 2));
@@ -99,31 +133,113 @@ app.post('/api/mpesa/callback', (req, res) => {
 });
 
 // C2B Validation
-app.post('/api/mpesa/c2b-validation', (req, res) => {
+app.post('/api/payments/c2b-validation', (req, res) => {
   console.log('C2B Validation Request:', req.body);
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 });
 
 // C2B Confirmation (Offline Payment)
-app.post('/api/mpesa/c2b-confirmation', (req, res) => {
+app.post('/api/payments/c2b-confirmation', (req, res) => {
   try {
     console.log('C2B Confirmation Received:', req.body);
-    const { TransID, TransAmount, FirstName, MiddleName, LastName } = req.body;
-    const ref = 'C2B-' + TransID;
-    db.prepare(
-      'INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, sale_type) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(ref, TransAmount, 'M-Pesa System', 'M-Pesa Offline', TransID, 'mpesa_c2b');
+    const { TransID, TransAmount, BillRefNumber, MSISDN, FirstName, MiddleName, LastName } = req.body;
+    const amount = Number(TransAmount) || 0;
+    const billRef = (BillRefNumber || '').trim();
+    const phone = MSISDN || '';
+
+    // Check if we already processed this receipt
+    const existing = db.prepare('SELECT id FROM mpesa_transactions WHERE mpesa_receipt = ?').get(TransID);
+    if (existing) {
+      console.log(`Duplicate C2B callback ignored for receipt: ${TransID}`);
+      return res.json({ ResultCode: 0, ResultDesc: 'Already processed' });
+    }
+
+    // Record the raw transaction
+    db.prepare(`
+      INSERT INTO mpesa_transactions (checkout_request_id, merchant_request_id, result_code, result_desc, amount, mpesa_receipt, transaction_date, phone, is_claimed)
+      VALUES (NULL, NULL, 0, 'C2B Offline Payment', ?, ?, datetime('now'), ?, 0)
+    `).run(amount, TransID, phone);
+
+    let matched = false;
+
+    if (billRef) {
+      // 1. Check Sales
+      const sale = db.prepare('SELECT id, payment_mode, mpesa_code FROM sales WHERE ref_number = ?').get(billRef);
+      if (sale) {
+        let newCodes = sale.mpesa_code ? `${sale.mpesa_code},${TransID}` : TransID;
+        db.prepare("UPDATE sales SET payment_mode = 'M-Pesa', mpesa_code = ? WHERE id = ?").run(newCodes, sale.id);
+        matched = true;
+      }
+
+      // 2. Check Tailoring Orders
+      if (!matched) {
+        const tailoring = db.prepare('SELECT id, paid_amount FROM tailoring_orders WHERE order_code = ?').get(billRef);
+        if (tailoring) {
+          const newPaid = Number(tailoring.paid_amount || 0) + amount;
+          db.prepare("UPDATE tailoring_orders SET paid_amount = ? WHERE id = ?").run(newPaid, tailoring.id);
+          matched = true;
+        }
+      }
+
+      // 3. Check Services
+      if (!matched) {
+        const service = db.prepare('SELECT id, paid_amount, mpesa_code FROM services WHERE service_code = ?').get(billRef);
+        if (service) {
+          const newPaid = Number(service.paid_amount || 0) + amount;
+          let newCodes = service.mpesa_code ? `${service.mpesa_code},${TransID}` : TransID;
+          db.prepare("UPDATE services SET paid_amount = ?, mpesa_code = ? WHERE id = ?").run(newPaid, newCodes, service.id);
+          matched = true;
+        }
+      }
+
+      // 4. Check Fitting Deposits
+      if (!matched) {
+        const fitting = db.prepare('SELECT id, paid_amount, mpesa_code FROM fitting_deposits WHERE fitting_code = ?').get(billRef);
+        if (fitting) {
+          const newPaid = Number(fitting.paid_amount || 0) + amount;
+          let newCodes = fitting.mpesa_code ? `${fitting.mpesa_code},${TransID}` : TransID;
+          db.prepare("UPDATE fitting_deposits SET paid_amount = ?, mpesa_code = ? WHERE id = ?").run(newPaid, newCodes, fitting.id);
+          matched = true;
+        }
+      }
+    }
+
+    if (matched) {
+      db.prepare("UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?").run(TransID);
+    }
+
+    // Unmatched payments are safely recorded in mpesa_transactions with is_claimed = 0
+
     res.json({ ResultCode: 0, ResultDesc: 'Success' });
   } catch (err) {
     console.error('C2B Confirmation Error:', err.message);
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Server Error' });
   }
 });
-
-app.get('/api/mpesa/register-urls', async (req, res) => {
+app.get('/api/payments/register-urls', async (req, res) => {
   try {
     const result = await registerC2BUrls();
     res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/payments/unclaimed', (req, res) => {
+  try {
+    const records = db.prepare("SELECT * FROM mpesa_transactions WHERE is_claimed = 0 AND result_code = 0 ORDER BY created_at DESC").all();
+    res.json(records);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/payments/claim', (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ success: false, message: 'Code required' });
+    db.prepare("UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?").run(code);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -688,8 +804,8 @@ app.patch('/api/workforce/:id/credentials', (req, res) => {
 // --- WORKER TASKS ---
 app.get('/api/worker-tasks/assignable', (req, res) => {
   try {
-    const services = dbAll("SELECT id, service_code as code, (item_description || ' (' || customer_name || ')') as description FROM services WHERE status != 'collected'");
-    const tailoring = dbAll("SELECT t.id, t.order_code as code, (COALESCE(g.title, 'Custom') || ' (' || t.customer_name || ')') as description FROM tailoring_orders t LEFT JOIN gallery g ON t.style_id = g.id WHERE t.status != 'collected'");
+    const services = dbAll("SELECT id, service_code as code, (item_description || ' (' || customer_name || ')') as description FROM services WHERE status != 'collected' AND id NOT IN (SELECT reference_id FROM worker_tasks WHERE task_type = 'service')");
+    const tailoring = dbAll("SELECT t.id, t.order_code as code, (COALESCE(g.title, 'Custom') || ' (' || t.customer_name || ')') as description FROM tailoring_orders t LEFT JOIN gallery g ON t.style_id = g.id WHERE t.status != 'collected' AND t.id NOT IN (SELECT reference_id FROM worker_tasks WHERE task_type = 'tailoring')");
     res.json({ services: services || [], tailoring: tailoring || [] });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -697,19 +813,50 @@ app.get('/api/worker-tasks/assignable', (req, res) => {
 });
 
 app.get('/api/worker-tasks', (req, res) => {
-  try {
-    const { worker_id } = req.query;
-    let query = 'SELECT * FROM worker_tasks';
-    let params = [];
-    if (worker_id) {
-        query += ' WHERE worker_id = ?';
-        params.push(worker_id);
+    try {
+      const { worker_id } = req.query;
+      let query = `SELECT wt.*, t.measurements, t.deadline, m.name as material_name, g.image_data as design_image 
+                   FROM worker_tasks wt 
+                   LEFT JOIN tailoring_orders t ON wt.reference_id = t.id AND wt.task_type = 'tailoring' 
+                   LEFT JOIN gallery g ON t.style_id = g.id
+                   LEFT JOIN materials m ON t.material_id = m.id`;
+      let params = [];
+      if (worker_id) {
+          query += ' WHERE wt.worker_id = ?';
+          params.push(worker_id);
+      }
+      query += ' ORDER BY wt.created_at DESC';
+      res.json(dbAll(query, params));
+    } catch (err) {
+      res.status(500).json({ message: err.message });
     }
-    query += ' ORDER BY created_at DESC';
-    res.json(dbAll(query, params));
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
+  });
+
+app.get('/api/worker-tasks/completed', (req, res) => {
+    try {
+        const { worker_id, range } = req.query;
+        let filter = "wt.status = 'completed'";
+        if (range === 'daily') filter += " AND date(wt.completed_at, 'localtime') = date('now', 'localtime')";
+        else if (range === 'weekly') filter += " AND date(wt.completed_at, 'localtime') >= date('now', 'localtime', '-7 days')";
+        else if (range === 'monthly') filter += " AND date(wt.completed_at, 'localtime') >= date('now', 'localtime', 'start of month')";
+        else if (range === 'yearly') filter += " AND date(wt.completed_at, 'localtime') >= date('now', 'localtime', 'start of year')";
+        
+        let query = `SELECT wt.*, t.measurements, t.deadline, m.name as material_name, g.image_data as design_image 
+                     FROM worker_tasks wt 
+                     LEFT JOIN tailoring_orders t ON wt.reference_id = t.id AND wt.task_type = 'tailoring' 
+                     LEFT JOIN gallery g ON t.style_id = g.id
+                     LEFT JOIN materials m ON t.material_id = m.id
+                     WHERE ${filter}`;
+        let params = [];
+        if (worker_id) {
+            query += ' AND wt.worker_id = ?';
+            params.push(worker_id);
+        }
+        query += ' ORDER BY wt.completed_at DESC';
+        res.json(dbAll(query, params));
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
 });
 
 app.post('/api/worker-tasks', (req, res) => {
@@ -729,7 +876,11 @@ app.patch('/api/worker-tasks/:id/status', (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    db.prepare('UPDATE worker_tasks SET status = ? WHERE id = ?').run(status, id);
+    if (status === 'completed') {
+      db.prepare('UPDATE worker_tasks SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
+    } else {
+      db.prepare('UPDATE worker_tasks SET status = ? WHERE id = ?').run(status, id);
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -770,7 +921,14 @@ app.get('/api/reports/:range', (req, res) => {
     const expensesSummary = dbGet(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM expenses WHERE ${expFilter}`);
     const workforceSummary = dbGet(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM workforce_payments WHERE ${expFilter}`);
 
-    res.json({ summary, modes, items, salesByType, expensesSummary, workforceSummary });
+    let workDoneFilter = "status = 'completed'";
+    if (range === 'daily') workDoneFilter += " AND date(completed_at, 'localtime') = date('now', 'localtime')";
+    else if (range === 'weekly') workDoneFilter += " AND date(completed_at, 'localtime') >= date('now', 'localtime', '-7 days')";
+    else if (range === 'monthly') workDoneFilter += " AND date(completed_at, 'localtime') >= date('now', 'localtime', 'start of month')";
+    else if (range === 'yearly') workDoneFilter += " AND date(completed_at, 'localtime') >= date('now', 'localtime', 'start of year')";
+    const workDone = dbAll(`SELECT worker_name, task_type, count(*) as count FROM worker_tasks WHERE ${workDoneFilter} GROUP BY worker_name, task_type ORDER BY count DESC`);
+
+    res.json({ summary, modes, items, salesByType, expensesSummary, workforceSummary, workDone });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

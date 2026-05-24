@@ -77,16 +77,14 @@ export const api = {
   addColor: (code, name) => apiFetch('/colors', { method: 'POST', body: JSON.stringify({ color_code: code, color_name: name }) }),
   deleteColor: (id) => apiFetch(`/colors/${id}`, { method: 'DELETE' }),
   backupDb: () => apiFetch('/backup'),
-  getPrinters: () => {
+  getPrinters: async () => {
     if (electronBridge && electronBridge.getPrinters) return electronBridge.getPrinters();
     return [];
   },
-  // Smart Print: Silent if in Electron, dialog if in Browser
   print: (html) => {
     if (electronBridge && electronBridge.print) {
       return electronBridge.print(html);
     }
-    // Browser Fallback
     const win = window.open('', '_blank');
     if (!win) return { success: false, message: 'Pop-up blocked. Please allow pop-ups for printing.' };
     win.document.write(html);
@@ -95,6 +93,14 @@ export const api = {
     win.print();
     win.close();
     return { success: true };
+  },
+  getUnclaimedMpesa: async () => {
+    if (electronBridge && electronBridge.getUnclaimedMpesa) return electronBridge.getUnclaimedMpesa();
+    return apiFetch('/payments/unclaimed').catch(() => []);
+  },
+  claimMpesaPayment: async (code) => {
+    if (electronBridge && electronBridge.claimMpesaPayment) return electronBridge.claimMpesaPayment(code);
+    return apiFetch('/payments/claim', { method: 'POST', body: JSON.stringify({ code }) }).catch(() => ({ success: false }));
   }
 };
 

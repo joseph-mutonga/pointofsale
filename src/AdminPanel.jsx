@@ -405,7 +405,7 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                 </div>
             </header>
 
-            <main className="admin-main" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', background: 'transparent' }}>
+            <main className="admin-main" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', background: 'transparent', minHeight: 0 }}>
                 <div style={{ width: '100%', padding: '20px' }}>
                     {lowStock.length > 0 && view !== 'low_stock' && (
                         <div style={{
@@ -910,6 +910,42 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                                     </tbody>
                                                 </table>
                                             </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="card" style={{ marginTop: '20px' }}>
+                                        <div className="card-body">
+                                            <h3>Workforce Production (Completed Tasks)</h3>
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Worker</th>
+                                                        <th>Task Type</th>
+                                                        <th style={{ textAlign: 'right' }}>Completed</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(reportData.workDone || []).map((wd, idx) => (
+                                                        <tr key={idx}>
+                                                            <td style={{ fontWeight: '600' }}>{wd.worker_name}</td>
+                                                            <td>
+                                                                <span style={{
+                                                                    padding: '4px 12px',
+                                                                    borderRadius: '12px',
+                                                                    fontSize: '0.75rem',
+                                                                    fontWeight: 'bold',
+                                                                    background: wd.task_type === 'service' ? '#dcfce7' : '#ede9fe',
+                                                                    color: wd.task_type === 'service' ? '#166534' : '#6d28d9'
+                                                                }}>
+                                                                    {wd.task_type === 'service' ? 'SERVICE' : 'TAILORING'}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#10b981' }}>{wd.count} tasks</td>
+                                                        </tr>
+                                                    ))}
+                                                    {(reportData.workDone || []).length === 0 && <tr><td colSpan="3" style={{ textAlign: 'center' }}>No work completed in this period</td></tr>}
+                                                </tbody>
+                                            </table>
                                         </div>
                                     </div>
                                 </>
@@ -2636,10 +2672,8 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                             >
                                     </button>
                                 </div>
-                            </div>
                         </div>
                     </div>
-                </div>
             )}
 
             {/* Set Worker Login Modal */}

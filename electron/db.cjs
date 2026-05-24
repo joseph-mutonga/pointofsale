@@ -25,6 +25,15 @@ function initDb() {
     }
   }
 
+  // Migration: mpesa_transactions is_claimed column
+  if (tableExists('mpesa_transactions')) {
+    const columns = db.prepare("PRAGMA table_info(mpesa_transactions)").all();
+    if (!columns.find(c => c.name === 'is_claimed')) {
+      console.log('Migrating mpesa_transactions: adding is_claimed column');
+      db.prepare("ALTER TABLE mpesa_transactions ADD COLUMN is_claimed INTEGER DEFAULT 0").run();
+    }
+  }
+
   // Migration: items table (rename name to item_name if it exists)
   if (tableExists('items')) {
     try {
@@ -228,6 +237,7 @@ function initDb() {
       mpesa_receipt TEXT,
       transaction_date TEXT,
       phone TEXT,
+      is_claimed INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 

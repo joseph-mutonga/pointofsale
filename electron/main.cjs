@@ -162,6 +162,32 @@ ipcMain.handle('login', (_, username, password) => {
 });
 
 ipcMain.handle('get-app-logo', () => {
+    // This is a placeholder since the logo is handled purely on the frontend via an import right now, 
+    // or can be loaded dynamically.
+    return null;
+});
+
+ipcMain.handle('get-unclaimed-mpesa', () => {
+    try {
+        return db.prepare("SELECT * FROM mpesa_transactions WHERE is_claimed = 0 AND result_code = 0 ORDER BY created_at DESC").all();
+    } catch (e) {
+        console.error(e);
+        return [];
+    }
+});
+
+ipcMain.handle('claim-mpesa-payment', (_, mpesa_receipt) => {
+    try {
+        if (!mpesa_receipt) return { success: false, message: 'No receipt code provided' };
+        db.prepare("UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?").run(mpesa_receipt);
+        return { success: true };
+    } catch (e) {
+        console.error(e);
+        return { success: false, message: e.message };
+    }
+});
+
+ipcMain.handle('get-app-logo-fallback', () => {
     try {
         const logoPath = isDev
             ? path.join(app.getAppPath(), 'src', 'assets', 'logo.png')
@@ -516,8 +542,16 @@ ipcMain.handle('assign-task', (_, data) => {
 ipcMain.handle('get-worker-tasks', (_, workerId) => {
     try {
         const sql = workerId
-            ? 'SELECT * FROM worker_tasks WHERE worker_id = ? ORDER BY assigned_at DESC'
-            : 'SELECT * FROM worker_tasks ORDER BY assigned_at DESC';
+            ? `SELECT wt.*, t.measurements, g.image_data as design_image 
+               FROM worker_tasks wt 
+               LEFT JOIN tailoring_orders t ON wt.task_id = t.id AND wt.task_type = 'tailoring' 
+               LEFT JOIN gallery g ON t.style_id = g.id 
+               WHERE wt.worker_id = ? ORDER BY wt.assigned_at DESC`
+            : `SELECT wt.*, t.measurements, g.image_data as design_image 
+               FROM worker_tasks wt 
+               LEFT JOIN tailoring_orders t ON wt.task_id = t.id AND wt.task_type = 'tailoring' 
+               LEFT JOIN gallery g ON t.style_id = g.id 
+               ORDER BY wt.assigned_at DESC`;
         return workerId
             ? db.prepare(sql).all(workerId)
             : db.prepare(sql).all();

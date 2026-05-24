@@ -7,7 +7,8 @@ export default function TailoringView({
     printTailoringSpecs,
     showToast,
     processing,
-    setProcessing
+    setProcessing,
+    unclaimedMpesa
 }) {
     const [garmentType, setGarmentType] = useState('shirt');
     const [orderSearch, setOrderSearch] = useState('');
@@ -208,6 +209,7 @@ export default function TailoringView({
         try {
             const res = await window.api.addTailoringOrder(data);
             if (res.success) {
+                if (data.payment_mode === 'M-Pesa' && data.mpesa_code) await window.api.claimMpesaPayment(data.mpesa_code);
                 const material = materials.find(m => m.id == data.material_id);
 
                 if (showToast) showToast(`Order Created (${res.code})! Printing Receipt...`, 'success');
@@ -231,14 +233,14 @@ export default function TailoringView({
         setTailoringPayment(ord);
     };
 
-    const triggerSTKPush = async (amount, phone) => {
+    const triggerSTKPush = async (amount, phone, onSuccessCallback = null) => {
         if (!phone) return showToast('Customer phone number is required for STK Push', 'error');
         if (!amount || amount <= 0) return showToast('Invalid amount', 'error');
 
         setProcessing(true);
         setStkStatus('pending');
         try {
-            const response = await fetch('http://localhost:5001/api/mpesa/stkpush', {
+            const response = await fetch('http://localhost:5001/api/payments/stkpush', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -249,45 +251,79 @@ export default function TailoringView({
                 })
             });
             const res = await response.json();
-            if (res.success) {
-                showToast('STK Push sent! Please check your phone.', 'success');
+            if (res.success && res.result && res.result.CheckoutRequestID) {
+                showToast('STK Push sent! Waiting for customer to enter PIN...', 'info');
+                setStkStatus('waiting_for_pin');
+                
+                let attempts = 0;
+                const pollInterval = setInterval(async () => {
+                    attempts++;
+                    try {
+                        const statusRes = await fetch(`http://localhost:5001/api/payments/status/${res.result.CheckoutRequestID}`);
+                        const statusData = await statusRes.json();
+                        
+                        if (statusData.status === 'success') {
+                            clearInterval(pollInterval);
+                            setStkStatus('success');
+                            showToast('Payment successful!', 'success');
+                            
+                            if (onSuccessCallback) {
+                                setTimeout(() => onSuccessCallback(statusData.receipt), 1500);
+                            } else {
+                                setTimeout(() => handleProcessTailoringPayment(null, amount, statusData.receipt), 1500);
+                            }
+                        } else if (statusData.status === 'failed') {
+                            clearInterval(pollInterval);
+                            setStkStatus('failed');
+                            showToast('Payment Failed: ' + statusData.description, 'error');
+                            setProcessing(false);
+                        } else if (attempts >= 20) { // 20 * 3s = 60s timeout
+                            clearInterval(pollInterval);
+                            setStkStatus('timeout');
+                            showToast('Payment timed out. Customer took too long.', 'error');
+                            setProcessing(false);
+                        }
+                    } catch (e) {
+                        console.error("Polling error:", e);
+                    }
+                }, 3000);
             } else {
                 showToast(res.message || 'STK Push failed', 'error');
                 setStkStatus('failed');
+                setProcessing(false);
             }
         } catch (err) {
             console.error('STK Error:', err);
             showToast('Could not reach M-Pesa server. Ensure it is running.', 'error');
             setStkStatus('failed');
-        } finally {
             setProcessing(false);
         }
     };
 
-    const handleProcessTailoringPayment = async (e) => {
-        e.preventDefault();
+    const handleProcessTailoringPayment = async (e, overrideAmount = null, overrideMpesaCode = null) => {
+        if (e) e.preventDefault();
         const ord = tailoringPayment;
         if (!ord) return;
 
-        const numericAmount = Number(e.target.amount.value);
-        const pMode = e.target.payment_mode.value;
-        const mCode = e.target.mpesa_code?.value || '';
+        const amt = overrideAmount !== null ? overrideAmount : Number(e.target.amount.value);
+        const pMode = overrideMpesaCode ? 'M-Pesa' : (e ? e.target.payment_mode.value : tailoringPaymentMode);
+        const code = overrideMpesaCode || (e ? e.target.mpesa_code?.value : '') || '';
 
         setProcessing(true);
         try {
             const res = await window.api.updateTailoringPayment({
                 id: ord.id,
-                amount: numericAmount,
+                amount: amt,
                 payment_mode: pMode,
-                mpesa_code: mCode,
-                cashier_name: user.full_name,
-                cashier_id: user.id
+                mpesa_code: code,
+                cashier_id: user.id,
+                cashier_name: user.full_name
             });
-
             if (res.success) {
-                const newCumulativePaid = Number(ord.paid_amount) + numericAmount;
+                if (pMode === 'M-Pesa' && code) await window.api.claimMpesaPayment(code);
+                const newCumulativePaid = Number(ord.paid_amount) + amt;
                 if (showToast) showToast('Payment Processed! Printing Receipt...', 'success');
-                await printTailoringReceipt({ ...ord, paid_amount: newCumulativePaid }, numericAmount);
+                await printTailoringReceipt({ ...ord, paid_amount: newCumulativePaid }, amt);
 
                 setTailoringPayment(null);
                 await loadData();
@@ -952,16 +988,38 @@ export default function TailoringView({
                                             </select>
                                         </div>
                                         <div id="tailor_mpesa_area" style={{ display: 'none' }}>
-                                            <label className="label" style={{ color: '#94a3b8', fontWeight: '700', fontSize: '0.8rem', marginBottom: '8px', display: 'block' }}>M-Pesa Code</label>
-                                            <input
-                                                name="mpesa_code_tailor"
-                                                placeholder="REF CODE"
+                                            <label className="label" style={{ color: '#94a3b8', fontWeight: '700', fontSize: '0.8rem', marginBottom: '8px', display: 'block' }}>Select M-Pesa Payment</label>
+                                            <select 
+                                                name="mpesa_code_tailor_dropdown" 
                                                 style={{
                                                     padding: '14px 16px',
                                                     borderRadius: '12px',
                                                     border: '1px solid #00f2ff',
                                                     background: 'rgba(0, 242, 255, 0.05)',
                                                     color: '#00f2ff',
+                                                    width: '100%',
+                                                    marginBottom: '10px'
+                                                }}
+                                                onChange={(e) => {
+                                                    document.getElementsByName('mpesa_code_tailor')[0].value = e.target.value;
+                                                }}
+                                            >
+                                                <option value="">-- Select or type below --</option>
+                                                {unclaimedMpesa?.map(u => (
+                                                    <option key={u.id} value={u.mpesa_receipt}>
+                                                        {u.mpesa_receipt} - Ksh {u.amount} ({u.phone})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <input
+                                                name="mpesa_code_tailor"
+                                                placeholder="Or type REF CODE"
+                                                style={{
+                                                    padding: '14px 16px',
+                                                    borderRadius: '12px',
+                                                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                                                    background: 'rgba(0, 0, 0, 0.3)',
+                                                    color: '#ffffff',
                                                     width: '100%',
                                                     textTransform: 'uppercase'
                                                 }}
@@ -982,7 +1040,13 @@ export default function TailoringView({
                                                 }}
                                                 onClick={() => {
                                                     const fd = new FormData(formRef.current);
-                                                    triggerSTKPush(fd.get('paid_amount'), fd.get('customer_phone'));
+                                                    triggerSTKPush(fd.get('paid_amount'), fd.get('customer_phone'), (receipt) => {
+                                                        const mpesaInput = formRef.current.querySelector('input[name="mpesa_code"]');
+                                                        if (mpesaInput) mpesaInput.value = receipt;
+                                                        const pModeInput = formRef.current.querySelector('input[name="payment_mode"]');
+                                                        if (pModeInput) pModeInput.value = 'M-Pesa';
+                                                        formRef.current.requestSubmit();
+                                                    });
                                                 }}
                                             >
                                                 📲 Request M-Pesa Payment (STK Push)
@@ -1145,17 +1209,35 @@ export default function TailoringView({
                                 </select>
                             </div>
                             <div id="tailoring_mpesa_code" style={{ display: 'none', marginBottom: '15px' }}>
-                                <label className="label" style={{ color: '#64748b' }}>M-Pesa Code</label>
-                                <input id="tailoring_mpesa_input" name="mpesa_code" placeholder="Confirmation Code" />
+                                <label className="label" style={{ color: '#64748b' }}>Select M-Pesa Payment</label>
+                                <select
+                                    className="input"
+                                    style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '10px' }}
+                                    onChange={(e) => {
+                                        document.getElementById('tailoring_mpesa_input').value = e.target.value;
+                                    }}
+                                >
+                                    <option value="">-- Select or type below --</option>
+                                    {unclaimedMpesa?.map(u => (
+                                        <option key={u.id} value={u.mpesa_receipt}>
+                                            {u.mpesa_receipt} - Ksh {u.amount} ({u.phone})
+                                        </option>
+                                    ))}
+                                </select>
+                                <input id="tailoring_mpesa_input" name="mpesa_code" placeholder="Or type Confirmation Code" />
                             </div>
                             <div id="tailoring_stk_btn" style={{ display: 'none', marginBottom: '15px' }}>
                                 <button 
                                     type="button" 
                                     className="btn" 
                                     style={{ background: '#10b981', color: 'white', width: '100%', fontWeight: 'bold' }}
-                                    onClick={() => {
-                                        const amount = document.getElementsByName('amount')[0].value;
-                                        triggerSTKPush(amount, tailoringPayment.customer_phone);
+                                    onClick={(e) => {
+                                        const form = e.target.closest('form');
+                                        triggerSTKPush(form.amount.value, tailoringPayment.customer_phone, (receipt) => {
+                                            document.getElementById('tailoring_mpesa_input').value = receipt;
+                                            form.payment_mode.value = 'M-Pesa';
+                                            form.requestSubmit();
+                                        });
                                     }}
                                 >
                                     📲 Send STK Push

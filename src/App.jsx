@@ -5,6 +5,15 @@ import GalleryView from './views/GalleryView';
 import './hub.css';
 import logo from './assets/logo.png';
 
+const parseWorkerMeasurements = (measurementsStr) => {
+    try {
+        const parsed = typeof measurementsStr === 'string' ? JSON.parse(measurementsStr || '[]') : measurementsStr || [];
+        return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+        return [];
+    }
+};
+
 function App() {
     const [user, setUser] = useState(null);
     const [view, setView] = useState(() => {
@@ -45,6 +54,10 @@ function App() {
     const [loginMode, setLoginMode] = useState('staff'); // 'staff' | 'worker'
     const [loggedInWorker, setLoggedInWorker] = useState(null);
     const [workerTasks, setWorkerTasks] = useState([]);
+    const [workerCompletedTasks, setWorkerCompletedTasks] = useState([]);
+    const [workerCompletedRange, setWorkerCompletedRange] = useState('daily');
+    const [workerTab, setWorkerTab] = useState('active');
+    const [unclaimedMpesa, setUnclaimedMpesa] = useState([]);
 
     useEffect(() => {
         // Load high-reliability base64 logo for printing in production
@@ -84,6 +97,15 @@ function App() {
         if (user) loadData();
     }, [user, showAdmin]);
 
+    useEffect(() => {
+        if (loggedInWorker) {
+            fetch(`http://localhost:5001/api/worker-tasks/completed?worker_id=${loggedInWorker.id}&range=${workerCompletedRange}`)
+                .then(res => res.json())
+                .then(data => setWorkerCompletedTasks(data || []))
+                .catch(err => console.error(err));
+        }
+    }, [loggedInWorker, workerCompletedRange]);
+
     const loadData = async () => {
         try {
             const all = await window.api.getAllItems();
@@ -105,6 +127,8 @@ function App() {
             setExpenses(exps || []);
             const sets = await window.api.getSettings();
             setSettings(sets || {});
+            const umpesa = await window.api.getUnclaimedMpesa();
+            setUnclaimedMpesa(umpesa || []);
         } catch (e) {
             console.error('Data load error:', e);
         }
@@ -172,9 +196,11 @@ function App() {
 
 
 
-    const handleProcess = async () => {
+    const handleProcess = async (overrideMpesaCode = null, overridePaymentMode = null) => {
         if (cart.length === 0) return;
-        if (paymentMode === 'M-Pesa' && !mpesaCode) return showToast('M-Pesa Code required', 'error');
+        const finalMode = overridePaymentMode || paymentMode;
+        const finalMpesa = overrideMpesaCode || mpesaCode;
+        if (finalMode === 'M-Pesa' && !finalMpesa) return showToast('M-Pesa Code required', 'error');
 
         setProcessing(true);
         try {
@@ -183,12 +209,13 @@ function App() {
                 total,
                 cashier: user.full_name || user.username,
                 cashierId: user.id,
-                paymentMode,
-                mpesaCode
+                paymentMode: finalMode,
+                mpesaCode: finalMpesa
             };
             const res = await window.api.processSale(saleData);
 
             if (res.success) {
+                if (finalMode === 'M-Pesa') await window.api.claimMpesaPayment(finalMpesa);
                 showToast('Receipt is being printed...', 'info');
                 await printReceipt(res.ref || res.ref_number || 'N/A');
                 setCart([]);
@@ -201,14 +228,14 @@ function App() {
         }
     };
 
-    const triggerSTKPush = async (amount, phone) => {
+    const triggerSTKPush = async (amount, phone, onSuccessCallback = null) => {
         if (!phone) return showToast('Phone number is required for STK Push', 'error');
         if (!amount || amount <= 0) return showToast('Invalid amount', 'error');
 
         setProcessing(true);
         setStkStatus('pending');
         try {
-            const response = await fetch('http://localhost:5001/api/mpesa/stkpush', {
+            const response = await fetch('http://localhost:5001/api/payments/stkpush', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -219,17 +246,52 @@ function App() {
                 })
             });
             const res = await response.json();
-            if (res.success) {
-                showToast('STK Push sent! Please check phone.', 'success');
+            if (res.success && res.result && res.result.CheckoutRequestID) {
+                showToast('STK Push sent! Waiting for customer to enter PIN...', 'info');
+                setStkStatus('waiting_for_pin');
+                
+                let attempts = 0;
+                const pollInterval = setInterval(async () => {
+                    attempts++;
+                    try {
+                        const statusRes = await fetch(`http://localhost:5001/api/payments/status/${res.result.CheckoutRequestID}`);
+                        const statusData = await statusRes.json();
+                        
+                        if (statusData.status === 'success') {
+                            clearInterval(pollInterval);
+                            setStkStatus('success');
+                            showToast('Payment successful!', 'success');
+                            if (onSuccessCallback) {
+                                setTimeout(() => onSuccessCallback(statusData.receipt), 1500);
+                            } else {
+                                setPaymentMode('M-Pesa');
+                                setMpesaCode(statusData.receipt);
+                                setTimeout(() => handleProcess(statusData.receipt, 'M-Pesa'), 1500);
+                            }
+                        } else if (statusData.status === 'failed') {
+                            clearInterval(pollInterval);
+                            setStkStatus('failed');
+                            showToast('Payment Failed: ' + statusData.description, 'error');
+                            setProcessing(false);
+                        } else if (attempts >= 20) { // 20 * 3s = 60s timeout
+                            clearInterval(pollInterval);
+                            setStkStatus('timeout');
+                            showToast('Payment timed out. Customer took too long.', 'error');
+                            setProcessing(false);
+                        }
+                    } catch (e) {
+                        console.error("Polling error:", e);
+                    }
+                }, 3000);
             } else {
                 showToast(res.message || 'STK Push failed', 'error');
                 setStkStatus('failed');
+                setProcessing(false);
             }
         } catch (err) {
             console.error('STK Error:', err);
             showToast('Could not reach M-Pesa server.', 'error');
             setStkStatus('failed');
-        } finally {
             setProcessing(false);
         }
     };
@@ -768,7 +830,7 @@ function App() {
         const statusColor = { assigned: '#dbeafe', in_progress: '#fef9c3', completed: '#dcfce7' };
         const statusText = { assigned: '#1e40af', in_progress: '#854d0e', completed: '#166534' };
         return (
-            <div className="app" style={{ minHeight: '100vh', background: '#0f172a' }}>
+            <div className="app" style={{ height: '100vh', background: '#0f172a' }}>
                 {processing && (<div className="processing-overlay"><div className="spinner"></div></div>)}
                 <header className="header" style={{ background: '#134e4a', borderBottom: '1px solid #0d9488' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -789,22 +851,36 @@ function App() {
                     </div>
                 </header>
 
-                <main style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
-                    <div className="card">
+                <main style={{ flex: 1, padding: '2rem', maxWidth: '1000px', width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+                        <button onClick={() => setWorkerTab('active')} style={{ flex: 1, padding: '12px', background: workerTab === 'active' ? '#0f766e' : '#1e293b', color: workerTab === 'active' ? 'white' : '#94a3b8', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>📋 Active Tasks</button>
+                        <button onClick={() => setWorkerTab('completed')} style={{ flex: 1, padding: '12px', background: workerTab === 'completed' ? '#0f766e' : '#1e293b', color: workerTab === 'completed' ? 'white' : '#94a3b8', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>✅ Work Done</button>
+                    </div>
+
+                    <div className="card" style={{ flex: 1 }}>
                         <div className="card-header" style={{ background: '#134e4a', color: '#5eead4', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span>📋 My Assigned Tasks</span>
-                            <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>{workerTasks.filter(t => t.status !== 'completed').length} active</span>
+                            <span>{workerTab === 'active' ? '📋 My Assigned Tasks' : '✅ Completed Work'}</span>
+                            {workerTab === 'active' ? (
+                                <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>{workerTasks.filter(t => t.status !== 'completed').length} active</span>
+                            ) : (
+                                <select value={workerCompletedRange} onChange={(e) => setWorkerCompletedRange(e.target.value)} style={{ padding: '4px 8px', borderRadius: '4px', background: '#0f172a', color: 'white', border: '1px solid #334155', fontSize: '0.8rem' }}>
+                                    <option value="daily">Daily</option>
+                                    <option value="weekly">Weekly</option>
+                                    <option value="monthly">Monthly</option>
+                                    <option value="yearly">Yearly</option>
+                                </select>
+                            )}
                         </div>
                         <div className="card-body">
-                            {workerTasks.length === 0 ? (
+                            {(workerTab === 'active' ? workerTasks.filter(t => t.status !== 'completed') : workerCompletedTasks).length === 0 ? (
                                 <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94a3b8' }}>
                                     <div style={{ fontSize: '3rem', marginBottom: '12px' }}>✅</div>
-                                    <div style={{ fontSize: '1.1rem', fontWeight: '600' }}>No tasks assigned yet</div>
-                                    <div style={{ fontSize: '0.85rem', marginTop: '6px' }}>Check back later or contact your admin</div>
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '600' }}>{workerTab === 'active' ? 'No active tasks' : 'No work completed'}</div>
+                                    <div style={{ fontSize: '0.85rem', marginTop: '6px' }}>{workerTab === 'active' ? 'Check back later or contact your admin' : 'Select a different time range'}</div>
                                 </div>
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {workerTasks.map(task => (
+                                    {(workerTab === 'active' ? workerTasks.filter(t => t.status !== 'completed') : workerCompletedTasks).map(task => (
                                         <div key={task.id} style={{ background: '#1e293b', borderRadius: '10px', padding: '16px 20px', border: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
                                             <div style={{ flex: 1 }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
@@ -819,8 +895,40 @@ function App() {
                                                 <div style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '4px' }}>{task.task_description}</div>
                                                 {task.notes && <div style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic' }}>📝 {task.notes}</div>}
                                                 <div style={{ color: '#475569', fontSize: '0.75rem', marginTop: '4px' }}>Assigned: {new Date(task.assigned_at).toLocaleDateString()} by {task.assigned_by}</div>
-                                            </div>
-                                            {task.status !== 'completed' && (
+                                                
+                                                {workerTab === 'completed' && task.completed_at && (
+                                                    <div style={{ color: '#10b981', fontSize: '0.75rem', marginTop: '4px', fontWeight: 'bold' }}>Completed: {new Date(task.completed_at).toLocaleString()}</div>
+                                                )}
+
+                                                  {task.task_type === 'tailoring' && (
+                                                      <div style={{ marginTop: '8px', display: 'flex', gap: '15px', fontSize: '0.75rem' }}>
+                                                          <div><span style={{ color: '#94a3b8' }}>Material:</span> <span style={{ color: '#cbd5e1', fontWeight: 'bold' }}>{task.material_name || 'Customer Supplied'}</span></div>
+                                                          {task.deadline && <div><span style={{ color: '#94a3b8' }}>Deadline:</span> <span style={{ color: '#ef4444', fontWeight: 'bold' }}>{task.deadline}</span></div>}
+                                                      </div>
+                                                  )}
+                                                  
+                                                  {task.task_type === 'tailoring' && task.measurements && (
+                                                      <div style={{ marginTop: '10px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+                                                          <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px', fontWeight: 'bold' }}>📏 MEASUREMENTS</div>
+                                                          {parseWorkerMeasurements(task.measurements).map((set, idx) => (
+                                                              <div key={idx} style={{ marginBottom: idx < parseWorkerMeasurements(task.measurements).length - 1 ? '8px' : '0' }}>
+                                                                  <span style={{ fontSize: '0.75rem', color: '#38bdf8', textTransform: 'uppercase', marginRight: '6px', fontWeight: 'bold' }}>{set.type || 'Custom'}:</span>
+                                                                  <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                                                      {Object.entries(set).filter(([k, v]) => k !== 'type' && v).map(([k, v]) => `${k.replace('m_', '').replace('_', ' ')}: ${v}`).join(', ')}
+                                                                  </span>
+                                                              </div>
+                                                          ))}
+                                                      </div>
+                                                  )}
+                                                  
+                                                  {task.task_type === 'tailoring' && task.design_image && (
+                                                      <div style={{ marginTop: '10px' }}>
+                                                          <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px', fontWeight: 'bold' }}>🖼️ DESIGN IMAGE</div>
+                                                          <img src={task.design_image} alt="Design" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '6px', border: '1px solid #334155' }} />
+                                                      </div>
+                                                  )}
+                                              </div>
+                                            {workerTab === 'active' && (
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '140px' }}>
                                                     {task.status === 'assigned' && (
                                                         <button className="btn" style={{ background: '#ca8a04', color: 'white', fontSize: '0.8rem', padding: '6px 12px' }}
@@ -835,7 +943,14 @@ function App() {
                                                         onClick={async () => {
                                                             setProcessing(true);
                                                             const res = await window.api.updateTaskStatus({ id: task.id, status: 'completed' });
-                                                            if (res.success) { const t = await window.api.getWorkerTasks(loggedInWorker.id); setWorkerTasks(t || []); showToast('Task marked complete!', 'success'); }
+                                                            if (res.success) { 
+                                                                const t = await window.api.getWorkerTasks(loggedInWorker.id); 
+                                                                setWorkerTasks(t || []); 
+                                                                fetch(`http://localhost:5001/api/worker-tasks/completed?worker_id=${loggedInWorker.id}&range=${workerCompletedRange}`)
+                                                                    .then(r => r.json())
+                                                                    .then(d => setWorkerCompletedTasks(d || []));
+                                                                showToast('Task marked complete!', 'success'); 
+                                                            }
                                                             setProcessing(false);
                                                         }}>✔ Mark Complete</button>
                                                 </div>
@@ -947,7 +1062,9 @@ function App() {
                 {processing && (
                     <div className="processing-overlay">
                         <div className="spinner"></div>
-                        <div style={{ fontWeight: 'bold' }}>Processing Sale...</div>
+                        <div style={{ fontWeight: 'bold' }}>
+                            {stkStatus === 'waiting_for_pin' ? 'Waiting for customer to enter PIN...' : 'Processing Transaction...'}
+                        </div>
                     </div>
                 )}
                 <header className="header">
@@ -1023,11 +1140,23 @@ function App() {
                                 </div>
                                 {paymentMode === 'M-Pesa' && (
                                     <div className="form-group">
-                                        <label className="label">M-Pesa Confirmation Code</label>
+                                        <label className="label">Select M-Pesa Payment</label>
+                                        <select 
+                                            value={mpesaCode} 
+                                            onChange={e => setMpesaCode(e.target.value)}
+                                            style={{ marginBottom: '10px', width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                                        >
+                                            <option value="">-- Select or type below --</option>
+                                            {unclaimedMpesa.map(u => (
+                                                <option key={u.id} value={u.mpesa_receipt}>
+                                                    {u.mpesa_receipt} - Ksh {u.amount} ({u.phone})
+                                                </option>
+                                            ))}
+                                        </select>
                                         <input value={mpesaCode}
                                             onChange={e => setMpesaCode(e.target.value)}
                                             onKeyDown={e => e.key === 'Enter' && handleProcess()}
-                                            placeholder="Type code..." />
+                                            placeholder="Or type code manually..." />
                                     </div>
                                 )}
                                 {paymentMode === 'M-Pesa-STK' && (
@@ -1299,7 +1428,11 @@ function App() {
                                                 const form = e.target.closest('form');
                                                 const amount = form.paid_amount.value;
                                                 const phone = form.customer_phone.value;
-                                                triggerSTKPush(amount, phone);
+                                                triggerSTKPush(amount, phone, (receipt) => {
+                                                    document.getElementsByName('mpesa_code_service')[0].value = receipt;
+                                                    document.getElementsByName('payment_mode_service')[0].value = 'M-Pesa';
+                                                    form.requestSubmit();
+                                                });
                                             }}
                                         >
                                             📲 Request STK Push
@@ -1427,7 +1560,11 @@ function App() {
                                         style={{ background: '#10b981', color: 'white', width: '100%' }}
                                         onClick={(e) => {
                                             const form = e.target.closest('form');
-                                            triggerSTKPush(form.amount.value, servicePayment.customer_phone);
+                                            triggerSTKPush(form.amount.value, servicePayment.customer_phone, (receipt) => {
+                                                document.getElementById('modal_mpesa_input').value = receipt;
+                                                form.payment_mode.value = 'M-Pesa';
+                                                form.requestSubmit();
+                                            });
                                         }}
                                     >
                                         📲 Send STK Push
@@ -1471,6 +1608,7 @@ function App() {
             try {
                 const res = await window.api.addFittingDeposit(data);
                 if (res.success) {
+                    if (data.payment_mode === 'M-Pesa' && data.mpesa_code) await window.api.claimMpesaPayment(data.mpesa_code);
                     showToast('Intake Successful! Printing Receipt...', 'success');
                     await printFittingReceipt({ ...data, fitting_code: res.code }, data.paid_amount);
                     e.target.reset();
@@ -1506,6 +1644,7 @@ function App() {
                 });
 
                 if (res.success) {
+                    if (pMode === 'M-Pesa' && mCode) await window.api.claimMpesaPayment(mCode);
                     showToast('Payment Processed! Printing Receipt...', 'success');
                     // Ensure print uses numeric addition
                     const totalPaidNow = Number(fit.paid_amount) + numericAmount;
@@ -1591,8 +1730,23 @@ function App() {
                                         <option value="M-Pesa-STK">M-Pesa (STK Push)</option>
                                     </select>
                                     <div id="mpesa-field-fit" style={{ display: 'none' }}>
-                                        <label className="label">M-Pesa Code</label>
-                                        <input name="mpesa_code_fit" />
+                                        <label className="label">Select M-Pesa Payment</label>
+                                        <select 
+                                            name="mpesa_code_fit_dropdown"
+                                            className="input"
+                                            style={{ width: '100%', marginBottom: '10px' }}
+                                            onChange={(e) => {
+                                                document.getElementsByName('mpesa_code_fit')[0].value = e.target.value;
+                                            }}
+                                        >
+                                            <option value="">-- Select or type below --</option>
+                                            {unclaimedMpesa?.map(u => (
+                                                <option key={u.id} value={u.mpesa_receipt}>
+                                                    {u.mpesa_receipt} - Ksh {u.amount} ({u.phone})
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <input name="mpesa_code_fit" placeholder="Or type M-Pesa Code" />
                                     </div>
                                     <div id="stk-btn-fit" style={{ display: 'none' }}>
                                         <button 
@@ -1603,7 +1757,11 @@ function App() {
                                                 const form = e.target.closest('form');
                                                 const amount = form.paid_amount.value;
                                                 const phone = form.customer_phone.value;
-                                                triggerSTKPush(amount, phone);
+                                                triggerSTKPush(amount, phone, (receipt) => {
+                                                    document.getElementsByName('mpesa_code_fit')[0].value = receipt;
+                                                    document.getElementsByName('payment_mode_fit')[0].value = 'M-Pesa';
+                                                    form.requestSubmit();
+                                                });
                                             }}
                                         >
                                             📲 Request STK Push
@@ -1698,8 +1856,22 @@ function App() {
                                     </select>
                                 </div>
                                 <div id="fit_mpesa_code" style={{ display: 'none', marginBottom: '15px' }}>
-                                    <label className="label">M-Pesa Code</label>
-                                    <input id="fit_mpesa_input" name="mpesa_code" placeholder="Confirmation Code" />
+                                    <label className="label">Select M-Pesa Payment</label>
+                                    <select
+                                        className="input"
+                                        style={{ width: '100%', marginBottom: '10px' }}
+                                        onChange={(e) => {
+                                            document.getElementById('fit_mpesa_input').value = e.target.value;
+                                        }}
+                                    >
+                                        <option value="">-- Select or type below --</option>
+                                        {unclaimedMpesa?.map(u => (
+                                            <option key={u.id} value={u.mpesa_receipt}>
+                                                {u.mpesa_receipt} - Ksh {u.amount} ({u.phone})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <input id="fit_mpesa_input" name="mpesa_code" placeholder="Or type Confirmation Code" />
                                 </div>
                                 <div id="fit_stk_btn_modal" style={{ display: 'none', marginBottom: '15px' }}>
                                     <button 
@@ -1708,7 +1880,11 @@ function App() {
                                         style={{ background: '#10b981', color: 'white', width: '100%' }}
                                         onClick={(e) => {
                                             const form = e.target.closest('form');
-                                            triggerSTKPush(form.amount.value, fittingPayment.customer_phone);
+                                            triggerSTKPush(form.amount.value, fittingPayment.customer_phone, (receipt) => {
+                                                document.getElementById('fit_mpesa_input').value = receipt;
+                                                form.payment_mode.value = 'M-Pesa';
+                                                form.requestSubmit();
+                                            });
                                         }}
                                     >
                                         📲 Send STK Push
@@ -1744,6 +1920,7 @@ function App() {
                 showToast={showToast}
                 processing={processing}
                 setProcessing={setProcessing}
+                unclaimedMpesa={unclaimedMpesa}
             />
         );
     }

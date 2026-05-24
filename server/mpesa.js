@@ -5,7 +5,8 @@ dotenv.config();
 
 const CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
-const SHORTCODE = process.env.MPESA_SHORTCODE;
+const STK_SHORTCODE = process.env.MPESA_STK_SHORTCODE || process.env.MPESA_SHORTCODE;
+const C2B_SHORTCODE = process.env.MPESA_C2B_SHORTCODE || process.env.MPESA_SHORTCODE;
 const PASSKEY = process.env.MPESA_PASSKEY;
 const ENV = process.env.MPESA_ENV || 'sandbox'; // 'sandbox' or 'production'
 
@@ -38,7 +39,7 @@ export async function stkPush(amount, phone, reference, description) {
     try {
         const token = await getAccessToken();
         const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-        const password = Buffer.from(`${SHORTCODE}${PASSKEY}${timestamp}`).toString('base64');
+        const password = Buffer.from(`${STK_SHORTCODE}${PASSKEY}${timestamp}`).toString('base64');
         
         // Ensure phone is in format 2547XXXXXXXX
         let formattedPhone = phone.replace(/[^0-9]/g, '');
@@ -47,13 +48,13 @@ export async function stkPush(amount, phone, reference, description) {
         if (formattedPhone.startsWith('1')) formattedPhone = '254' + formattedPhone;
 
         const payload = {
-            BusinessShortCode: SHORTCODE,
+            BusinessShortCode: STK_SHORTCODE,
             Password: password,
             Timestamp: timestamp,
             TransactionType: 'CustomerPayBillOnline',
             Amount: Math.round(amount),
             PartyA: formattedPhone,
-            PartyB: SHORTCODE,
+            PartyB: STK_SHORTCODE,
             PhoneNumber: formattedPhone,
             CallBackURL: process.env.MPESA_CALLBACK_URL,
             AccountReference: reference,
@@ -80,7 +81,7 @@ export async function registerC2BUrls() {
     try {
         const token = await getAccessToken();
         const payload = {
-            ShortCode: SHORTCODE,
+            ShortCode: C2B_SHORTCODE,
             ResponseType: 'Completed',
             ConfirmationURL: process.env.MPESA_CONFIRMATION_URL,
             ValidationURL: process.env.MPESA_VALIDATION_URL
