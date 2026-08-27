@@ -898,7 +898,8 @@
 /* Admin Panel - Large Screens (Full HD and above) - Enhanced Visibility */
 @media (min-width: 1601px) {
     .app .header {
-        height: 64px !important;
+        height: auto !important;
+        min-height: 64px;
         padding: 0 2rem !important;
         flex-shrink: 0;
     }
@@ -970,7 +971,8 @@
 /* Admin Panel - Standard Laptops (14-15 inch) */
 @media (min-width: 1367px) and (max-width: 1600px) {
     .app .header {
-        height: 60px !important;
+        height: auto !important;
+        min-height: 60px;
         padding: 0 1.25rem !important;
         flex-shrink: 0;
     }
@@ -1030,9 +1032,16 @@
 /* Admin Panel - Compact for smaller screens (12-14 inch) */
 @media (max-width: 1366px) {
     .app .header {
-        height: 56px !important;
+        height: auto !important;
+        min-height: 56px;
         padding: 0 0.75rem !important;
         flex-shrink: 0;
+    }
+
+    .app .header > div:last-child {
+        flex: 1;
+        min-width: 0;
+        justify-content: flex-end;
     }
 
     .app .main {
