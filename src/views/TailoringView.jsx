@@ -1102,12 +1102,30 @@ export default function TailoringView({
                             <div style={{ fontSize: '1.1rem', fontWeight: '700' }}>Custom Tailoring Orders</div>
                             <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{tailoringOrders?.length || 0} orders in the workflow</div>
                         </div>
-                        <input
-                            placeholder="Search Order/Phone..."
-                            value={orderSearch}
-                            onChange={e => setOrderSearch(e.target.value)}
-                            style={{ maxWidth: '220px', fontSize: '0.9rem', padding: '10px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)', color: '#fff' }}
-                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <input
+                                placeholder="Search Order/Phone..."
+                                value={orderSearch}
+                                onChange={e => setOrderSearch(e.target.value)}
+                                style={{ width: '220px', maxWidth: '100%', fontSize: '0.9rem', padding: '11px 12px', borderRadius: '10px', border: '1px solid rgba(0,242,255,0.35)', background: 'rgba(15,23,42,0.75)', color: '#fff', outline: 'none' }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => {}}
+                                style={{
+                                    padding: '10px 18px',
+                                    borderRadius: '10px',
+                                    border: 'none',
+                                    background: 'linear-gradient(135deg, #00f2ff, #3b82f6)',
+                                    color: '#06131d',
+                                    fontWeight: '800',
+                                    cursor: 'pointer',
+                                    boxShadow: '0 8px 20px rgba(0,242,255,0.25)'
+                                }}
+                            >
+                                Search
+                            </button>
+                        </div>
                     </div>
                     <div className="card-body" style={{ maxHeight: '600px', overflowY: 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 10px' }}>

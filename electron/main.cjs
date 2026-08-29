@@ -988,13 +988,13 @@ ipcMain.handle('print', async (_, html) => {
         
         console.log(`Print Job: printer=${printerName || 'Not configured'}, copies=${numCopies}`);
 
-        // If no printer configured, silently skip (no PDF opening)
+        // If no printer configured, fall back to the system default printer instead of silently skipping.
         if (!printerName) {
-            console.log('No printer configured. Print job skipped silently.');
-            return { success: true };
+            console.log('No configured printer found. Printing to default system printer.');
+            printerName = null;
         }
 
-        // Print multiple copies to configured printer
+        // Print multiple copies to the configured or default printer
         let successCount = 0;
         for (let copy = 1; copy <= numCopies; copy++) {
             printWin = new BrowserWindow({ 
@@ -1011,33 +1011,33 @@ ipcMain.handle('print', async (_, html) => {
                 await printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 
                 const printers = await printWin.webContents.getPrintersAsync();
-                const target = printers.find(p => p.name === printerName);
+                const target = printerName ? printers.find(p => p.name === printerName) : null;
 
-                if (target) {
-                    console.log(`[Copy ${copy}/${numCopies}] Printing to: ${printerName}`);
-                    
-                    await new Promise((resolve, reject) => {
-                        printWin.webContents.print({
-                            silent: true,
-                            deviceName: printerName,
-                            printBackground: true,
-                            margins: { marginType: 'none' }
-                        }, (success, errorType) => {
-                            if (!success) {
-                                reject(new Error(`Print failed: ${errorType}`));
-                            } else {
-                                resolve();
-                            }
-                        });
-                    });
-                    
-                    successCount++;
-                    console.log(`✓ Copy ${copy} printed successfully`);
-                } else {
+                if (printerName && !target) {
                     console.warn(`Printer '${printerName}' not found on system.`);
                     printWin.close();
                     return { success: false, message: `Printer '${printerName}' not found. Check printer connection and try again.` };
                 }
+
+                console.log(`[Copy ${copy}/${numCopies}] Printing to: ${printerName || 'default system printer'}`);
+
+                await new Promise((resolve, reject) => {
+                    printWin.webContents.print({
+                        silent: !!printerName,
+                        deviceName: printerName || undefined,
+                        printBackground: true,
+                        margins: { marginType: 'none' }
+                    }, (success, errorType) => {
+                        if (!success) {
+                            reject(new Error(`Print failed: ${errorType || 'Unknown print error'}`));
+                        } else {
+                            resolve();
+                        }
+                    });
+                });
+
+                successCount++;
+                console.log(`✓ Copy ${copy} printed successfully`);
             } catch (printErr) {
                 console.error(`Print error on copy ${copy}:`, printErr.message);
                 printWin.close();

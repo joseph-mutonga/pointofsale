@@ -198,14 +198,37 @@ function App() {
 
     const handleProcess = async (overrideMpesaCode = null, overridePaymentMode = null) => {
         if (cart.length === 0) return;
+
+        if (overrideMpesaCode && typeof overrideMpesaCode === 'object' && 'preventDefault' in overrideMpesaCode) {
+            overrideMpesaCode = null;
+            overridePaymentMode = null;
+        }
+
         const finalMode = overridePaymentMode || paymentMode;
         const finalMpesa = overrideMpesaCode || mpesaCode;
         if (finalMode === 'M-Pesa' && !finalMpesa) return showToast('M-Pesa Code required', 'error');
 
+        const printFrame = document.createElement('iframe');
+        printFrame.setAttribute('style', 'position:fixed;left:-9999px;top:-9999px;width:0;height:0;border:0;opacity:0;pointer-events:none;');
+        document.body.appendChild(printFrame);
+
         setProcessing(true);
         try {
+            const safeCart = cart.map(item => ({
+                id: item.id ?? null,
+                item_id: item.id ?? null,
+                item_name: item.item_name || item.name || '',
+                name: item.item_name || item.name || '',
+                code: item.item_code || item.code || '',
+                item_code: item.item_code || item.code || '',
+                qty: Number(item.qty) || 0,
+                price: Number(item.price) || 0,
+                material: item.material || null,
+                colorCode: item.colorCode || null
+            }));
+
             const saleData = {
-                items: cart,
+                items: safeCart,
                 total,
                 cashier: user.full_name || user.username,
                 cashierId: user.id,
@@ -217,7 +240,10 @@ function App() {
             if (res.success) {
                 if (finalMode === 'M-Pesa') await window.api.claimMpesaPayment(finalMpesa);
                 showToast('Receipt is being printed...', 'info');
-                await printReceipt(res.ref || res.ref_number || 'N/A');
+                const printResult = await printReceipt(res.ref || res.ref_number || 'N/A', printFrame);
+                if (!printResult || printResult.success === false) {
+                    showToast('Sale completed, but the receipt could not be printed automatically.', 'error');
+                }
                 setCart([]);
                 setMpesaCode('');
                 setPaymentMode('Cash');
@@ -296,7 +322,7 @@ function App() {
         }
     };
 
-    const printReceipt = (ref) => {
+    const printReceipt = (ref, existingWindow = null) => {
         const html = `
       <html>
         <head>
@@ -361,7 +387,7 @@ function App() {
         </body>
       </html>
     `;
-        return window.api.print(html);
+        return window.api.print(html, existingWindow);
     };
 
     const printServiceReceipt = (srv, paidAmountThisTime) => {
@@ -1214,7 +1240,7 @@ function App() {
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => setCart([])}>Void</button>
-                                    <button className="btn btn-success" style={{ flex: 2 }} onClick={handleProcess}>Process</button>
+                                    <button className="btn btn-success" style={{ flex: 2 }} onClick={() => handleProcess()}>Process</button>
                                 </div>
                             </div>
                         </div>

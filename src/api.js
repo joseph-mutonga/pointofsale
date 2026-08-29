@@ -81,18 +81,37 @@ export const api = {
     if (electronBridge && electronBridge.getPrinters) return electronBridge.getPrinters();
     return [];
   },
-  print: (html) => {
+  print: (html, frame = null) => {
     if (electronBridge && electronBridge.print) {
       return electronBridge.print(html);
     }
-    const win = window.open('', '_blank');
-    if (!win) return { success: false, message: 'Pop-up blocked. Please allow pop-ups for printing.' };
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
-    win.close();
-    return { success: true };
+
+    const targetFrame = frame || (() => {
+      const printFrame = document.createElement('iframe');
+      printFrame.setAttribute('style', 'position:fixed;left:-9999px;top:-9999px;width:0;height:0;border:0;opacity:0;pointer-events:none;');
+      document.body.appendChild(printFrame);
+      return printFrame;
+    })();
+
+    try {
+      const frameDoc = targetFrame.contentWindow.document;
+      frameDoc.open();
+      frameDoc.write(html);
+      frameDoc.close();
+      targetFrame.contentWindow.focus();
+      setTimeout(() => {
+        try { targetFrame.contentWindow.print(); } catch (printErr) { console.warn('Print dialog failed:', printErr); }
+        setTimeout(() => {
+          try {
+            if (targetFrame && targetFrame.parentNode) targetFrame.parentNode.removeChild(targetFrame);
+          } catch (err) {}
+        }, 1500);
+      }, 200);
+      return { success: true };
+    } catch (err) {
+      console.warn('Inline print failed:', err);
+      return { success: false, message: 'Receipt print could not be triggered in this browser. Please try again or use the desktop version.' };
+    }
   },
   getUnclaimedMpesa: async () => {
     if (electronBridge && electronBridge.getUnclaimedMpesa) return electronBridge.getUnclaimedMpesa();
