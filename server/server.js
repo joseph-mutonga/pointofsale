@@ -2,35 +2,59 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
-import Database from 'better-sqlite3';
-import path from 'path';
+import pool from './db.js';
 import { stkPush, registerC2BUrls } from './mpesa.js';
 
 dotenv.config();
 
 const app = express();
-const dbPath = path.resolve(process.cwd(), 'pos.db');
-const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 5001;
 
-// Helper: run a SELECT and return all rows
-const dbAll = (sql, params = []) => db.prepare(sql).all(...params);
-// Helper: run INSERT/UPDATE/DELETE
-const dbRun = (sql, params = []) => db.prepare(sql).run(...params);
-// Helper: run a SELECT and return first row
-const dbGet = (sql, params = []) => db.prepare(sql).get(...params);
+const transaction = async (callback) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await callback(connection);
+    await connection.commit();
+    return result;
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+};
+
+const dbAll = async (sql, params = []) => {
+  const [rows] = await pool.execute(sql, params);
+  return rows;
+};
+
+const dbRun = async (sql, params = []) => {
+  const [result] = await pool.execute(sql, params);
+  return result;
+};
+
+const dbGet = async (sql, params = []) => {
+  const [rows] = await pool.execute(sql, params);
+  return rows[0] || null;
+};
+
+const dbSet = async (connection, sql, params = []) => {
+  const [result] = await connection.execute(sql, params);
+  return result;
+};
 
 // --- AUTH ---
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     const hash = crypto.createHash('sha256').update(password).digest('hex');
-    const user = dbGet('SELECT * FROM users WHERE username = ? AND password = ?', [username, hash]);
+    const user = await dbGet('SELECT * FROM users WHERE username = ? AND password = ?', [username, hash]);
     if (user) {
       if (user.status !== 'active') return res.status(403).json({ success: false, message: 'Account disabled' });
       return res.json({ success: true, user: { id: user.id, username: user.username, role: user.role, full_name: user.full_name } });
@@ -46,16 +70,15 @@ app.post('/api/payments/stkpush', async (req, res) => {
   try {
     const { amount, phone, reference, description } = req.body;
     const result = await stkPush(amount, phone, reference, description);
-    
-    // Create pending record to track status
+
     if (result.CheckoutRequestID) {
-      db.prepare(`
+      await dbRun(`
         INSERT INTO mpesa_transactions (checkout_request_id, merchant_request_id, result_code, result_desc, amount, phone, transaction_date)
-        VALUES (?, ?, -1, 'Pending Payment', ?, ?, datetime('now'))
-        ON CONFLICT(checkout_request_id) DO NOTHING
-      `).run(result.CheckoutRequestID, result.MerchantRequestID || null, amount, phone);
+        VALUES (?, ?, -1, 'Pending Payment', ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE checkout_request_id = VALUES(checkout_request_id)
+      `, [result.CheckoutRequestID, result.MerchantRequestID || null, amount, phone]);
     }
-    
+
     res.json({ success: true, result });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -63,23 +86,23 @@ app.post('/api/payments/stkpush', async (req, res) => {
 });
 
 // STK Push Status Polling
-app.get('/api/payments/status/:checkoutRequestId', (req, res) => {
+app.get('/api/payments/status/:checkoutRequestId', async (req, res) => {
   try {
     const { checkoutRequestId } = req.params;
-    const record = db.prepare('SELECT result_code, result_desc, mpesa_receipt, amount FROM mpesa_transactions WHERE checkout_request_id = ?').get(checkoutRequestId);
-    
+    const record = await dbGet('SELECT result_code, result_desc, mpesa_receipt, amount FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
+
     if (!record) {
       return res.json({ success: true, status: 'not_found' });
     }
-    
+
     if (record.result_code === -1) {
       return res.json({ success: true, status: 'pending', description: record.result_desc });
     }
-    
+
     if (record.result_code === 0) {
       return res.json({ success: true, status: 'success', receipt: record.mpesa_receipt, amount: record.amount, description: record.result_desc });
     }
-    
+
     return res.json({ success: true, status: 'failed', description: record.result_desc });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -87,7 +110,7 @@ app.get('/api/payments/status/:checkoutRequestId', (req, res) => {
 });
 
 // STK Push Callback
-app.post('/api/payments/callback', (req, res) => {
+app.post('/api/payments/callback', async (req, res) => {
   try {
     const { Body } = req.body;
     console.log('M-Pesa Callback Received:', JSON.stringify(req.body, null, 2));
@@ -114,16 +137,16 @@ app.post('/api/payments/callback', (req, res) => {
       console.log('M-Pesa Payment Failed:', resultDesc);
     }
 
-    db.prepare(`
+    await dbRun(`
       INSERT INTO mpesa_transactions (checkout_request_id, merchant_request_id, result_code, result_desc, amount, mpesa_receipt, transaction_date, phone)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(checkout_request_id) DO UPDATE SET
-        result_code = excluded.result_code,
-        result_desc = excluded.result_desc,
-        amount = excluded.amount,
-        mpesa_receipt = excluded.mpesa_receipt,
-        phone = excluded.phone
-    `).run(checkoutRequestID, merchantRequestID, resultCode, resultDesc, amount, mpesaCode, String(transDate || ''), String(phone || ''));
+      ON DUPLICATE KEY UPDATE
+        result_code = VALUES(result_code),
+        result_desc = VALUES(result_desc),
+        amount = VALUES(amount),
+        mpesa_receipt = VALUES(mpesa_receipt),
+        phone = VALUES(phone)
+    `, [checkoutRequestID, merchantRequestID, resultCode, resultDesc, amount, mpesaCode, String(transDate || ''), String(phone || '')]);
 
     res.json({ ResultCode: 0, ResultDesc: 'Success' });
   } catch (err) {
@@ -132,83 +155,73 @@ app.post('/api/payments/callback', (req, res) => {
   }
 });
 
-// C2B Validation
 app.post('/api/payments/c2b-validation', (req, res) => {
   console.log('C2B Validation Request:', req.body);
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 });
 
-// C2B Confirmation (Offline Payment)
-app.post('/api/payments/c2b-confirmation', (req, res) => {
+app.post('/api/payments/c2b-confirmation', async (req, res) => {
   try {
     console.log('C2B Confirmation Received:', req.body);
-    const { TransID, TransAmount, BillRefNumber, MSISDN, FirstName, MiddleName, LastName } = req.body;
+    const { TransID, TransAmount, BillRefNumber, MSISDN } = req.body;
     const amount = Number(TransAmount) || 0;
     const billRef = (BillRefNumber || '').trim();
     const phone = MSISDN || '';
 
-    // Check if we already processed this receipt
-    const existing = db.prepare('SELECT id FROM mpesa_transactions WHERE mpesa_receipt = ?').get(TransID);
+    const existing = await dbGet('SELECT id FROM mpesa_transactions WHERE mpesa_receipt = ?', [TransID]);
     if (existing) {
       console.log(`Duplicate C2B callback ignored for receipt: ${TransID}`);
       return res.json({ ResultCode: 0, ResultDesc: 'Already processed' });
     }
 
-    // Record the raw transaction
-    db.prepare(`
+    await dbRun(`
       INSERT INTO mpesa_transactions (checkout_request_id, merchant_request_id, result_code, result_desc, amount, mpesa_receipt, transaction_date, phone, is_claimed)
-      VALUES (NULL, NULL, 0, 'C2B Offline Payment', ?, ?, datetime('now'), ?, 0)
-    `).run(amount, TransID, phone);
+      VALUES (NULL, NULL, 0, 'C2B Offline Payment', ?, ?, NOW(), ?, 0)
+    `, [amount, TransID, phone]);
 
     let matched = false;
 
     if (billRef) {
-      // 1. Check Sales
-      const sale = db.prepare('SELECT id, payment_mode, mpesa_code FROM sales WHERE ref_number = ?').get(billRef);
+      const sale = await dbGet('SELECT id, payment_mode, mpesa_code FROM sales WHERE ref_number = ?', [billRef]);
       if (sale) {
-        let newCodes = sale.mpesa_code ? `${sale.mpesa_code},${TransID}` : TransID;
-        db.prepare("UPDATE sales SET payment_mode = 'M-Pesa', mpesa_code = ? WHERE id = ?").run(newCodes, sale.id);
+        const newCodes = sale.mpesa_code ? `${sale.mpesa_code},${TransID}` : TransID;
+        await dbRun("UPDATE sales SET payment_mode = 'M-Pesa', mpesa_code = ? WHERE id = ?", [newCodes, sale.id]);
         matched = true;
       }
 
-      // 2. Check Tailoring Orders
       if (!matched) {
-        const tailoring = db.prepare('SELECT id, paid_amount FROM tailoring_orders WHERE order_code = ?').get(billRef);
+        const tailoring = await dbGet('SELECT id, paid_amount FROM tailoring_orders WHERE order_code = ?', [billRef]);
         if (tailoring) {
           const newPaid = Number(tailoring.paid_amount || 0) + amount;
-          db.prepare("UPDATE tailoring_orders SET paid_amount = ? WHERE id = ?").run(newPaid, tailoring.id);
+          await dbRun('UPDATE tailoring_orders SET paid_amount = ? WHERE id = ?', [newPaid, tailoring.id]);
           matched = true;
         }
       }
 
-      // 3. Check Services
       if (!matched) {
-        const service = db.prepare('SELECT id, paid_amount, mpesa_code FROM services WHERE service_code = ?').get(billRef);
+        const service = await dbGet('SELECT id, paid_amount, mpesa_code FROM services WHERE service_code = ?', [billRef]);
         if (service) {
           const newPaid = Number(service.paid_amount || 0) + amount;
-          let newCodes = service.mpesa_code ? `${service.mpesa_code},${TransID}` : TransID;
-          db.prepare("UPDATE services SET paid_amount = ?, mpesa_code = ? WHERE id = ?").run(newPaid, newCodes, service.id);
+          const newCodes = service.mpesa_code ? `${service.mpesa_code},${TransID}` : TransID;
+          await dbRun('UPDATE services SET paid_amount = ?, mpesa_code = ? WHERE id = ?', [newPaid, newCodes, service.id]);
           matched = true;
         }
       }
 
-      // 4. Check Fitting Deposits
       if (!matched) {
-        const fitting = db.prepare('SELECT id, paid_amount, mpesa_code FROM fitting_deposits WHERE fitting_code = ?').get(billRef);
+        const fitting = await dbGet('SELECT id, paid_amount, mpesa_code FROM fitting_deposits WHERE fitting_code = ?', [billRef]);
         if (fitting) {
           const newPaid = Number(fitting.paid_amount || 0) + amount;
-          let newCodes = fitting.mpesa_code ? `${fitting.mpesa_code},${TransID}` : TransID;
-          db.prepare("UPDATE fitting_deposits SET paid_amount = ?, mpesa_code = ? WHERE id = ?").run(newPaid, newCodes, fitting.id);
+          const newCodes = fitting.mpesa_code ? `${fitting.mpesa_code},${TransID}` : TransID;
+          await dbRun('UPDATE fitting_deposits SET paid_amount = ?, mpesa_code = ? WHERE id = ?', [newPaid, newCodes, fitting.id]);
           matched = true;
         }
       }
     }
 
     if (matched) {
-      db.prepare("UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?").run(TransID);
+      await dbRun('UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?', [TransID]);
     }
-
-    // Unmatched payments are safely recorded in mpesa_transactions with is_claimed = 0
 
     res.json({ ResultCode: 0, ResultDesc: 'Success' });
   } catch (err) {
@@ -216,6 +229,7 @@ app.post('/api/payments/c2b-confirmation', (req, res) => {
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Server Error' });
   }
 });
+
 app.get('/api/payments/register-urls', async (req, res) => {
   try {
     const result = await registerC2BUrls();
@@ -225,20 +239,20 @@ app.get('/api/payments/register-urls', async (req, res) => {
   }
 });
 
-app.get('/api/payments/unclaimed', (req, res) => {
+app.get('/api/payments/unclaimed', async (req, res) => {
   try {
-    const records = db.prepare("SELECT * FROM mpesa_transactions WHERE is_claimed = 0 AND result_code = 0 ORDER BY created_at DESC").all();
+    const records = await dbAll('SELECT * FROM mpesa_transactions WHERE is_claimed = 0 AND result_code = 0 ORDER BY created_at DESC');
     res.json(records);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/payments/claim', (req, res) => {
+app.post('/api/payments/claim', async (req, res) => {
   try {
     const { code } = req.body;
     if (!code) return res.status(400).json({ success: false, message: 'Code required' });
-    db.prepare("UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?").run(code);
+    await dbRun('UPDATE mpesa_transactions SET is_claimed = 1 WHERE mpesa_receipt = ?', [code]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -246,35 +260,37 @@ app.post('/api/payments/claim', (req, res) => {
 });
 
 // --- ITEMS ---
-app.get('/api/items', (req, res) => {
+app.get('/api/items', async (req, res) => {
   try {
-    const rows = dbAll('SELECT * FROM items');
+    const rows = await dbAll('SELECT * FROM items');
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.get('/api/items/low-stock', (req, res) => {
+app.get('/api/items/low-stock', async (req, res) => {
   try {
-    const rows = dbAll("SELECT *, 'item' as type FROM items WHERE stock <= min_stock OR stock IS NULL");
+    const rows = await dbAll("SELECT *, 'item' as type FROM items WHERE stock <= min_stock OR stock IS NULL");
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/items/upsert', (req, res) => {
+app.post('/api/items/upsert', async (req, res) => {
   try {
     const item = req.body;
     if (item.id) {
-      db.prepare(
-        'UPDATE items SET code = ?, item_code = ?, item_name = ?, price = ?, stock = ?, min_stock = ?, category = ? WHERE id = ?'
-      ).run(item.code, item.item_code || item.code, item.item_name || item.name, item.price || 0, item.stock || 0, item.min_stock || 5, item.category || null, item.id);
+      await dbRun(
+        'UPDATE items SET code = ?, item_code = ?, item_name = ?, price = ?, stock = ?, min_stock = ?, category = ? WHERE id = ?',
+        [item.code, item.item_code || item.code, item.item_name || item.name, item.price || 0, item.stock || 0, item.min_stock || 5, item.category || null, item.id]
+      );
     } else {
-      db.prepare(
-        'INSERT INTO items (code, item_code, item_name, price, stock, min_stock, category) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(item.code, item.item_code || item.code, item.item_name || item.name, item.price || 0, item.stock || 0, item.min_stock || 5, item.category || null);
+      await dbRun(
+        'INSERT INTO items (code, item_code, item_name, price, stock, min_stock, category) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [item.code, item.item_code || item.code, item.item_name || item.name, item.price || 0, item.stock || 0, item.min_stock || 5, item.category || null]
+      );
     }
     res.json({ success: true });
   } catch (err) {
@@ -282,14 +298,14 @@ app.post('/api/items/upsert', (req, res) => {
   }
 });
 
-app.delete('/api/items/:id', (req, res) => {
+app.delete('/api/items/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const row = dbGet('SELECT code FROM items WHERE id = ?', [id]);
+    const row = await dbGet('SELECT code FROM items WHERE id = ?', [id]);
     if (row && (row.code === 'SYSTEM_SERVICE' || row.code === 'SYSTEM_TAILORING')) {
       return res.status(400).json({ success: false, message: 'Restricted: System item' });
     }
-    db.prepare('DELETE FROM items WHERE id = ?').run(id);
+    await dbRun('DELETE FROM items WHERE id = ?', [id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -297,42 +313,43 @@ app.delete('/api/items/:id', (req, res) => {
 });
 
 // --- SALES ---
-app.post('/api/sales/process', (req, res) => {
+app.post('/api/sales/process', async (req, res) => {
   try {
     const { items, total, cashier, cashierId, paymentMode, mpesaCode } = req.body;
     const ref = 'REF-' + Date.now();
 
-    const trans = db.transaction(() => {
-      const saleRes = db.prepare(
-        'INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, cashier_id, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-      ).run(ref, total, cashier, paymentMode, mpesaCode || null, cashierId, 'pos');
-      const saleId = saleRes.lastInsertRowid;
+    await transaction(async (connection) => {
+      const saleRes = await dbSet(connection,
+        'INSERT INTO sales (ref_number, total_amount, cashier_name, payment_mode, mpesa_code, cashier_id, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+        [ref, total, cashier, paymentMode, mpesaCode || null, cashierId, 'pos']
+      );
+      const saleId = saleRes.insertId;
 
       for (const it of items) {
-        db.prepare(
-          'INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total, material, color_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(saleId, it.id, it.name, it.code || 'N/A', it.qty, it.price, it.qty * it.price, it.material || null, it.colorCode || null);
+        await dbSet(connection,
+          'INSERT INTO sale_items (sale_id, item_id, item_name, item_code, quantity, price, total, material, color_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [saleId, it.id, it.name, it.code || 'N/A', it.qty, it.price, it.qty * it.price, it.material || null, it.colorCode || null]
+        );
         if (!String(it.code).startsWith('SYSTEM_')) {
-          db.prepare('UPDATE items SET stock = stock - ? WHERE id = ?').run(it.qty, it.id);
+          await dbSet(connection, 'UPDATE items SET stock = stock - ? WHERE id = ?', [it.qty, it.id]);
         }
       }
       return ref;
     });
 
-    const resultRef = trans();
-    res.json({ success: true, ref: resultRef });
+    res.json({ success: true, ref });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.get('/api/sales', (req, res) => {
+app.get('/api/sales', async (req, res) => {
   try {
-    const rows = dbAll(`
+    const rows = await dbAll(`
       SELECT s.*,
       EXISTS(SELECT 1 FROM sale_items WHERE sale_id = s.id AND (material IS NOT NULL OR color_code IS NOT NULL)) as is_custom
       FROM sales s
-      ORDER BY COALESCE(s.created_at, s.date) DESC
+      ORDER BY s.created_at DESC
     `);
     res.json(rows);
   } catch (err) {
@@ -340,9 +357,9 @@ app.get('/api/sales', (req, res) => {
   }
 });
 
-app.get('/api/sales/:id/items', (req, res) => {
+app.get('/api/sales/:id/items', async (req, res) => {
   try {
-    const rows = dbAll('SELECT * FROM sale_items WHERE sale_id = ?', [req.params.id]);
+    const rows = await dbAll('SELECT * FROM sale_items WHERE sale_id = ?', [req.params.id]);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -350,57 +367,59 @@ app.get('/api/sales/:id/items', (req, res) => {
 });
 
 // --- SERVICES ---
-app.get('/api/services', (req, res) => {
+app.get('/api/services', async (req, res) => {
   try {
-    const rows = dbAll('SELECT * FROM services ORDER BY created_at DESC');
+    const rows = await dbAll('SELECT * FROM services ORDER BY created_at DESC');
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/services', (req, res) => {
+app.post('/api/services', async (req, res) => {
   try {
     const data = req.body;
     const code = 'SRV-' + Math.random().toString(36).substr(2, 6).toUpperCase();
 
-    const trans = db.transaction(() => {
-      db.prepare(
-        'INSERT INTO services (service_code, customer_name, customer_phone, item_description, service_required, total_amount, paid_amount, status, payment_mode, mpesa_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(code, data.customer_name, data.customer_phone, data.item_description, data.service_required, data.total_amount, data.paid_amount, 'pending', data.payment_mode || 'Cash', data.mpesa_code || null);
+    await transaction(async (connection) => {
+      await dbSet(connection,
+        'INSERT INTO services (service_code, customer_name, customer_phone, item_description, service_required, total_amount, paid_amount, status, payment_mode, mpesa_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [code, data.customer_name, data.customer_phone, data.item_description, data.service_required, data.total_amount, data.paid_amount, 'pending', data.payment_mode || 'Cash', data.mpesa_code || null]
+      );
 
       if (data.paid_amount > 0) {
         const ref = 'SRV-DEP-' + Date.now();
-        db.prepare(
-          'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-        ).run(ref, data.paid_amount, data.cashier_name, data.cashier_id, data.payment_mode || 'Cash', data.mpesa_code || null, 'service');
+        await dbSet(connection,
+          'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+          [ref, data.paid_amount, data.cashier_name, data.cashier_id, data.payment_mode || 'Cash', data.mpesa_code || null, 'service']
+        );
       }
     });
 
-    trans();
     res.json({ success: true, code });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.patch('/api/services/:id/payment', (req, res) => {
+app.patch('/api/services/:id/payment', async (req, res) => {
   try {
     const { id } = req.params;
     const { amount, status, payment_mode, mpesa_code, cashier_name, cashier_id } = req.body;
 
-    const trans = db.transaction(() => {
-      db.prepare(
-        'UPDATE services SET paid_amount = paid_amount + ?, status = ?, payment_mode = ?, mpesa_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-      ).run(amount, status, payment_mode, mpesa_code, id);
+    await transaction(async (connection) => {
+      await dbSet(connection,
+        'UPDATE services SET paid_amount = paid_amount + ?, status = ?, payment_mode = ?, mpesa_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [amount, status, payment_mode, mpesa_code, id]
+      );
 
       const ref = 'SRV-PY-' + Date.now();
-      db.prepare(
-        'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-      ).run(ref, amount, cashier_name || 'System', cashier_id || null, payment_mode || 'Cash', mpesa_code || null, 'service');
+      await dbSet(connection,
+        'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+        [ref, amount, cashier_name || 'System', cashier_id || null, payment_mode || 'Cash', mpesa_code || null, 'service']
+      );
     });
 
-    trans();
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -408,9 +427,9 @@ app.patch('/api/services/:id/payment', (req, res) => {
 });
 
 // --- TAILORING ORDERS ---
-app.get('/api/tailoring-orders', (req, res) => {
+app.get('/api/tailoring-orders', async (req, res) => {
   try {
-    const rows = dbAll(`
+    const rows = await dbAll(`
       SELECT t.*, g.title as style_name, g.image_data as style_image, m.name as material_name
       FROM tailoring_orders t
       LEFT JOIN gallery g ON t.style_id = g.id
@@ -423,56 +442,56 @@ app.get('/api/tailoring-orders', (req, res) => {
   }
 });
 
-app.post('/api/tailoring-orders', (req, res) => {
+app.post('/api/tailoring-orders', async (req, res) => {
   try {
     const data = req.body;
     const code = 'ORD-' + Math.random().toString(36).substr(2, 6).toUpperCase();
     const styleId = (data.style_id && data.style_id !== '') ? parseInt(data.style_id) : null;
     const materialId = (data.material_id && data.material_id !== '') ? parseInt(data.material_id) : null;
 
-    const trans = db.transaction(() => {
-      db.prepare(
+    await transaction(async (connection) => {
+      await dbSet(connection,
         `INSERT INTO tailoring_orders (order_code, customer_name, customer_phone, style_id, material_id, measurements, total_price, paid_amount, deadline, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(code, data.customer_name, data.customer_phone, styleId, materialId, JSON.stringify(data.measurements), data.total_price, data.paid_amount, data.deadline, 'pending');
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [code, data.customer_name, data.customer_phone, styleId, materialId, JSON.stringify(data.measurements), data.total_price, data.paid_amount, data.deadline, 'pending']
+      );
 
       if (data.paid_amount > 0) {
         const ref = 'TLR-' + Date.now();
-        db.prepare(
-          'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-        ).run(ref, data.paid_amount, data.cashier_name, data.cashier_id, data.payment_mode || 'Cash', data.mpesa_code || null, 'tailoring');
+        await dbSet(connection,
+          'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+          [ref, data.paid_amount, data.cashier_name, data.cashier_id, data.payment_mode || 'Cash', data.mpesa_code || null, 'tailoring']
+        );
       }
     });
 
-    trans();
     res.json({ success: true, code });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.patch('/api/tailoring-orders/:id/payment', (req, res) => {
+app.patch('/api/tailoring-orders/:id/payment', async (req, res) => {
   try {
     const { id } = req.params;
     const { amount, payment_mode, mpesa_code, cashier_name, cashier_id } = req.body;
 
-    const trans = db.transaction(() => {
-      const ord = dbGet('SELECT * FROM tailoring_orders WHERE id = ?', [id]);
+    await transaction(async (connection) => {
+      const ord = await dbGet('SELECT * FROM tailoring_orders WHERE id = ?', [id]);
       if (!ord) throw new Error('Order not found');
 
       const newPaid = Number(ord.paid_amount) + Number(amount);
       const newStatus = newPaid >= Number(ord.total_price) ? 'collected' : ord.status;
 
-      db.prepare('UPDATE tailoring_orders SET paid_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(newPaid, newStatus, id);
+      await dbSet(connection, 'UPDATE tailoring_orders SET paid_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newPaid, newStatus, id]);
 
       const ref = 'TLR-PY-' + Date.now();
-      db.prepare(
-        'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-      ).run(ref, amount, cashier_name, cashier_id, payment_mode || 'Cash', mpesa_code || null, 'tailoring_payment');
+      await dbSet(connection,
+        'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+        [ref, amount, cashier_name, cashier_id, payment_mode || 'Cash', mpesa_code || null, 'tailoring_payment']
+      );
     });
 
-    trans();
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -480,9 +499,9 @@ app.patch('/api/tailoring-orders/:id/payment', (req, res) => {
 });
 
 // --- SETTINGS ---
-app.get('/api/settings', (req, res) => {
+app.get('/api/settings', async (req, res) => {
   try {
-    const rows = dbAll('SELECT * FROM settings');
+    const rows = await dbAll('SELECT `key`, value FROM settings');
     const settings = {};
     rows.forEach(r => settings[r.key] = r.value);
     res.json(settings);
@@ -491,16 +510,14 @@ app.get('/api/settings', (req, res) => {
   }
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   try {
     const settings = req.body;
-    const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
-    const trans = db.transaction(() => {
+    await transaction(async (connection) => {
       for (const [key, value] of Object.entries(settings)) {
-        upsert.run(key, value);
+        await dbSet(connection, 'INSERT INTO settings (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)', [key, value]);
       }
     });
-    trans();
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -508,41 +525,39 @@ app.post('/api/settings', (req, res) => {
 });
 
 // --- GALLERY ---
-app.get('/api/gallery', (req, res) => {
+app.get('/api/gallery', async (req, res) => {
   try {
-    const rows = dbAll('SELECT * FROM gallery ORDER BY created_at DESC');
+    const rows = await dbAll('SELECT * FROM gallery ORDER BY created_at DESC');
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/gallery', (req, res) => {
+app.post('/api/gallery', async (req, res) => {
   try {
     const data = req.body;
-    db.prepare('INSERT INTO gallery (title, description, image_data, category) VALUES (?, ?, ?, ?)')
-      .run(data.title, data.description, data.image_data, data.category);
+    await dbRun('INSERT INTO gallery (title, description, image_data, category) VALUES (?, ?, ?, ?)', [data.title, data.description, data.image_data, data.category]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.patch('/api/gallery/:id', (req, res) => {
+app.patch('/api/gallery/:id', async (req, res) => {
   try {
     const data = req.body;
-    const result = db.prepare('UPDATE gallery SET title = ?, image_data = COALESCE(?, image_data), category = ? WHERE id = ?')
-      .run(data.title, data.image_data || null, data.category, req.params.id);
-    if (result.changes === 0) return res.status(404).json({ success: false, message: 'Style not found' });
+    const result = await dbRun('UPDATE gallery SET title = ?, image_data = COALESCE(?, image_data), category = ? WHERE id = ?', [data.title, data.image_data || null, data.category, req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ success: false, message: 'Style not found' });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.delete('/api/gallery/:id', (req, res) => {
+app.delete('/api/gallery/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM gallery WHERE id = ?').run(req.params.id);
+    await dbRun('DELETE FROM gallery WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -550,52 +565,52 @@ app.delete('/api/gallery/:id', (req, res) => {
 });
 
 // --- MATERIALS & COLORS ---
-app.get('/api/materials', (req, res) => {
+app.get('/api/materials', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM materials ORDER BY name ASC'));
+    res.json(await dbAll('SELECT * FROM materials ORDER BY name ASC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/materials', (req, res) => {
+app.post('/api/materials', async (req, res) => {
   try {
-    db.prepare('INSERT INTO materials (name) VALUES (?)').run(req.body.name);
+    await dbRun('INSERT INTO materials (name) VALUES (?)', [req.body.name]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.delete('/api/materials/:id', (req, res) => {
+app.delete('/api/materials/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM materials WHERE id = ?').run(req.params.id);
+    await dbRun('DELETE FROM materials WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.get('/api/colors', (req, res) => {
+app.get('/api/colors', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM colors ORDER BY color_code ASC'));
+    res.json(await dbAll('SELECT * FROM colors ORDER BY color_code ASC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/colors', (req, res) => {
+app.post('/api/colors', async (req, res) => {
   try {
-    db.prepare('INSERT INTO colors (color_code, color_name) VALUES (?, ?)').run(req.body.color_code, req.body.color_name);
+    await dbRun('INSERT INTO colors (color_code, color_name) VALUES (?, ?)', [req.body.color_code, req.body.color_name]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.delete('/api/colors/:id', (req, res) => {
+app.delete('/api/colors/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM colors WHERE id = ?').run(req.params.id);
+    await dbRun('DELETE FROM colors WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -603,62 +618,62 @@ app.delete('/api/colors/:id', (req, res) => {
 });
 
 // --- FITTING DEPOSITS ---
-app.get('/api/fitting-deposits', (req, res) => {
+app.get('/api/fitting-deposits', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM fitting_deposits ORDER BY updated_at DESC'));
+    res.json(await dbAll('SELECT * FROM fitting_deposits ORDER BY updated_at DESC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/fitting-deposits', (req, res) => {
+app.post('/api/fitting-deposits', async (req, res) => {
   try {
     const data = req.body;
     const code = 'FIT-' + Math.random().toString(36).substr(2, 6).toUpperCase();
 
-    const trans = db.transaction(() => {
-      db.prepare(
+    await transaction(async (connection) => {
+      await dbSet(connection,
         `INSERT INTO fitting_deposits (fitting_code, customer_name, customer_phone, item_id, item_name, material, color, total_amount, paid_amount, status, payment_mode, mpesa_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(code, data.customer_name, data.customer_phone, data.item_id || null, data.item_name, data.material || null, data.color || null, data.total_amount, data.paid_amount, 'pending', data.payment_mode || 'Cash', data.mpesa_code || null);
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [code, data.customer_name, data.customer_phone, data.item_id || null, data.item_name, data.material || null, data.color || null, data.total_amount, data.paid_amount, 'pending', data.payment_mode || 'Cash', data.mpesa_code || null]
+      );
 
       if (data.paid_amount > 0) {
         const ref = 'FIT-DEP-' + Date.now();
-        db.prepare(
-          'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-        ).run(ref, data.paid_amount, data.cashier_name, data.cashier_id, data.payment_mode || 'Cash', data.mpesa_code || null, 'fitting');
+        await dbSet(connection,
+          'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+          [ref, data.paid_amount, data.cashier_name, data.cashier_id, data.payment_mode || 'Cash', data.mpesa_code || null, 'fitting']
+        );
       }
     });
 
-    trans();
     res.json({ success: true, code });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.patch('/api/fitting-deposits/:id/payment', (req, res) => {
+app.patch('/api/fitting-deposits/:id/payment', async (req, res) => {
   try {
     const { id } = req.params;
     const { amount, payment_mode, mpesa_code, cashier_name, cashier_id } = req.body;
 
-    const trans = db.transaction(() => {
-      const fit = dbGet('SELECT * FROM fitting_deposits WHERE id = ?', [id]);
+    await transaction(async (connection) => {
+      const fit = await dbGet('SELECT * FROM fitting_deposits WHERE id = ?', [id]);
       if (!fit) throw new Error('Deposit not found');
 
       const newPaid = Number(fit.paid_amount) + Number(amount);
       const newStatus = newPaid >= Number(fit.total_amount) ? 'completed' : fit.status;
 
-      db.prepare('UPDATE fitting_deposits SET paid_amount = ?, status = ?, payment_mode = ?, mpesa_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(newPaid, newStatus, payment_mode || 'Cash', mpesa_code || null, id);
+      await dbSet(connection, 'UPDATE fitting_deposits SET paid_amount = ?, status = ?, payment_mode = ?, mpesa_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newPaid, newStatus, payment_mode || 'Cash', mpesa_code || null, id]);
 
       const ref = 'FIT-PY-' + Date.now();
-      db.prepare(
-        'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-      ).run(ref, amount, cashier_name, cashier_id, payment_mode || 'Cash', mpesa_code || null, 'fitting_payment');
+      await dbSet(connection,
+        'INSERT INTO sales (ref_number, total_amount, cashier_name, cashier_id, payment_mode, mpesa_code, sale_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+        [ref, amount, cashier_name, cashier_id, payment_mode || 'Cash', mpesa_code || null, 'fitting_payment']
+      );
     });
 
-    trans();
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -666,19 +681,18 @@ app.patch('/api/fitting-deposits/:id/payment', (req, res) => {
 });
 
 // --- EXPENSES ---
-app.get('/api/expenses', (req, res) => {
+app.get('/api/expenses', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM expenses ORDER BY created_at DESC'));
+    res.json(await dbAll('SELECT * FROM expenses ORDER BY created_at DESC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/expenses', (req, res) => {
+app.post('/api/expenses', async (req, res) => {
   try {
     const { category, amount, description, payment_mode } = req.body;
-    db.prepare('INSERT INTO expenses (category, amount, description, payment_mode) VALUES (?, ?, ?, ?)')
-      .run(category, amount, description, payment_mode || 'Cash');
+    await dbRun('INSERT INTO expenses (category, amount, description, payment_mode) VALUES (?, ?, ?, ?)', [category, amount, description, payment_mode || 'Cash']);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -686,30 +700,27 @@ app.post('/api/expenses', (req, res) => {
 });
 
 // --- USERS ---
-app.get('/api/users', (req, res) => {
+app.get('/api/users', async (req, res) => {
   try {
-    res.json(dbAll('SELECT id, username, role, full_name, status FROM users'));
+    res.json(await dbAll('SELECT id, username, role, full_name, status FROM users'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/users/upsert', (req, res) => {
+app.post('/api/users/upsert', async (req, res) => {
   try {
     const u = req.body;
     if (u.id) {
       if (u.password) {
         const hash = crypto.createHash('sha256').update(u.password).digest('hex');
-        db.prepare('UPDATE users SET full_name = ?, username = ?, status = ?, password = ? WHERE id = ?')
-          .run(u.full_name, u.username, u.status, hash, u.id);
+        await dbRun('UPDATE users SET full_name = ?, username = ?, status = ?, password = ? WHERE id = ?', [u.full_name, u.username, u.status, hash, u.id]);
       } else {
-        db.prepare('UPDATE users SET full_name = ?, username = ?, status = ? WHERE id = ?')
-          .run(u.full_name, u.username, u.status, u.id);
+        await dbRun('UPDATE users SET full_name = ?, username = ?, status = ? WHERE id = ?', [u.full_name, u.username, u.status, u.id]);
       }
     } else {
       const hash = crypto.createHash('sha256').update(u.password || '1234').digest('hex');
-      db.prepare('INSERT INTO users (username, password, role, full_name, status) VALUES (?, ?, ?, ?, ?)')
-        .run(u.username, hash, u.role || 'cashier', u.full_name, 'active');
+      await dbRun('INSERT INTO users (username, password, role, full_name, status) VALUES (?, ?, ?, ?, ?)', [u.username, hash, u.role || 'cashier', u.full_name, 'active']);
     }
     res.json({ success: true });
   } catch (err) {
@@ -718,66 +729,63 @@ app.post('/api/users/upsert', (req, res) => {
 });
 
 // --- WORKFORCE ---
-app.get('/api/workforce', (req, res) => {
+app.get('/api/workforce', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM workforce ORDER BY name ASC'));
+    res.json(await dbAll('SELECT * FROM workforce ORDER BY name ASC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/workforce', (req, res) => {
+app.post('/api/workforce', async (req, res) => {
   try {
     const { name, role } = req.body;
-    db.prepare('INSERT INTO workforce (name, role, status) VALUES (?, ?, ?)')
-      .run(name, role, 'active');
+    await dbRun('INSERT INTO workforce (name, role, status) VALUES (?, ?, ?)', [name, role, 'active']);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.delete('/api/workforce/:id', (req, res) => {
+app.delete('/api/workforce/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM workforce WHERE id = ?').run(req.params.id);
+    await dbRun('DELETE FROM workforce WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.get('/api/production-logs', (req, res) => {
+app.get('/api/production-logs', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM production_logs ORDER BY created_at DESC'));
+    res.json(await dbAll('SELECT * FROM production_logs ORDER BY created_at DESC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/production-logs', (req, res) => {
+app.post('/api/production-logs', async (req, res) => {
   try {
     const { worker_id, worker_name, item_name, item_id, quantity, action } = req.body;
-    db.prepare('INSERT INTO production_logs (worker_id, worker_name, item_name, item_id, quantity, action) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(worker_id, worker_name, item_name, item_id || null, quantity, action);
+    await dbRun('INSERT INTO production_logs (worker_id, worker_name, item_name, item_id, quantity, action) VALUES (?, ?, ?, ?, ?, ?)', [worker_id, worker_name, item_name, item_id || null, quantity, action]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.get('/api/workforce-payments', (req, res) => {
+app.get('/api/workforce-payments', async (req, res) => {
   try {
-    res.json(dbAll('SELECT * FROM workforce_payments ORDER BY created_at DESC'));
+    res.json(await dbAll('SELECT * FROM workforce_payments ORDER BY created_at DESC'));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.post('/api/workforce-payments', (req, res) => {
+app.post('/api/workforce-payments', async (req, res) => {
   try {
     const { worker_id, worker_name, amount, payment_mode, notes, mpesa_code } = req.body;
-    db.prepare('INSERT INTO workforce_payments (worker_id, worker_name, amount, payment_mode, notes, mpesa_code) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(worker_id, worker_name, amount, payment_mode || 'Cash', notes, mpesa_code || null);
+    await dbRun('INSERT INTO workforce_payments (worker_id, worker_name, amount, payment_mode, notes, mpesa_code) VALUES (?, ?, ?, ?, ?, ?)', [worker_id, worker_name, amount, payment_mode || 'Cash', notes, mpesa_code || null]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -785,11 +793,11 @@ app.post('/api/workforce-payments', (req, res) => {
 });
 
 // --- WORKER AUTH ---
-app.post('/api/workforce/login', (req, res) => {
+app.post('/api/workforce/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     const hash = crypto.createHash('sha256').update(password).digest('hex');
-    const user = dbGet('SELECT * FROM workforce WHERE username = ? AND password = ?', [username, hash]);
+    const user = await dbGet('SELECT * FROM workforce WHERE username = ? AND password = ?', [username, hash]);
     if (user) {
       if (user.status !== 'active') return res.status(403).json({ success: false, message: 'Account disabled' });
       return res.json({ success: true, worker: { id: user.id, username: user.username, role: user.role, name: user.name } });
@@ -800,13 +808,13 @@ app.post('/api/workforce/login', (req, res) => {
   }
 });
 
-app.patch('/api/workforce/:id/credentials', (req, res) => {
+app.patch('/api/workforce/:id/credentials', async (req, res) => {
   try {
     const { id } = req.params;
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ success: false, message: 'Username and password required' });
     const hash = crypto.createHash('sha256').update(password).digest('hex');
-    db.prepare('UPDATE workforce SET username = ?, password = ? WHERE id = ?').run(username, hash, id);
+    await dbRun('UPDATE workforce SET username = ?, password = ? WHERE id = ?', [username, hash, id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -814,84 +822,84 @@ app.patch('/api/workforce/:id/credentials', (req, res) => {
 });
 
 // --- WORKER TASKS ---
-app.get('/api/worker-tasks/assignable', (req, res) => {
+app.get('/api/worker-tasks/assignable', async (req, res) => {
   try {
-    const services = dbAll("SELECT id, service_code as code, (item_description || ' (' || customer_name || ')') as description FROM services WHERE status != 'collected' AND id NOT IN (SELECT reference_id FROM worker_tasks WHERE task_type = 'service')");
-    const tailoring = dbAll("SELECT t.id, t.order_code as code, (COALESCE(g.title, 'Custom') || ' (' || t.customer_name || ')') as description FROM tailoring_orders t LEFT JOIN gallery g ON t.style_id = g.id WHERE t.status != 'collected' AND t.id NOT IN (SELECT reference_id FROM worker_tasks WHERE task_type = 'tailoring')");
+    const services = await dbAll("SELECT id, service_code as code, CONCAT(item_description, ' (', customer_name, ')') as description FROM services WHERE status != 'collected' AND id NOT IN (SELECT reference_id FROM worker_tasks WHERE task_type = 'service')");
+    const tailoring = await dbAll("SELECT t.id, t.order_code as code, CONCAT(COALESCE(g.title, 'Custom'), ' (', t.customer_name, ')') as description FROM tailoring_orders t LEFT JOIN gallery g ON t.style_id = g.id WHERE t.status != 'collected' AND t.id NOT IN (SELECT reference_id FROM worker_tasks WHERE task_type = 'tailoring')");
     res.json({ services: services || [], tailoring: tailoring || [] });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.get('/api/worker-tasks', (req, res) => {
-    try {
-      const { worker_id } = req.query;
-      let query = `SELECT wt.*, t.measurements, t.deadline, m.name as material_name, g.image_data as design_image 
-                   FROM worker_tasks wt 
-                   LEFT JOIN tailoring_orders t ON wt.reference_id = t.id AND wt.task_type = 'tailoring' 
-                   LEFT JOIN gallery g ON t.style_id = g.id
-                   LEFT JOIN materials m ON t.material_id = m.id`;
-      let params = [];
-      if (worker_id) {
-          query += ' WHERE wt.worker_id = ?';
-          params.push(worker_id);
-      }
-      query += ' ORDER BY wt.created_at DESC';
-      res.json(dbAll(query, params));
-    } catch (err) {
-      res.status(500).json({ message: err.message });
+app.get('/api/worker-tasks', async (req, res) => {
+  try {
+    const { worker_id } = req.query;
+    let query = `SELECT wt.*, t.measurements, t.deadline, m.name as material_name, g.image_data as design_image
+                 FROM worker_tasks wt
+                 LEFT JOIN tailoring_orders t ON wt.reference_id = t.id AND wt.task_type = 'tailoring'
+                 LEFT JOIN gallery g ON t.style_id = g.id
+                 LEFT JOIN materials m ON t.material_id = m.id`;
+    const params = [];
+    if (worker_id) {
+      query += ' WHERE wt.worker_id = ?';
+      params.push(worker_id);
     }
-  });
-
-app.get('/api/worker-tasks/completed', (req, res) => {
-    try {
-        const { worker_id, range } = req.query;
-        let filter = "wt.status = 'completed'";
-        if (range === 'daily') filter += " AND date(wt.completed_at, 'localtime') = date('now', 'localtime')";
-        else if (range === 'weekly') filter += " AND date(wt.completed_at, 'localtime') >= date('now', 'localtime', '-7 days')";
-        else if (range === 'monthly') filter += " AND date(wt.completed_at, 'localtime') >= date('now', 'localtime', 'start of month')";
-        else if (range === 'yearly') filter += " AND date(wt.completed_at, 'localtime') >= date('now', 'localtime', 'start of year')";
-        
-        let query = `SELECT wt.*, t.measurements, t.deadline, m.name as material_name, g.image_data as design_image 
-                     FROM worker_tasks wt 
-                     LEFT JOIN tailoring_orders t ON wt.reference_id = t.id AND wt.task_type = 'tailoring' 
-                     LEFT JOIN gallery g ON t.style_id = g.id
-                     LEFT JOIN materials m ON t.material_id = m.id
-                     WHERE ${filter}`;
-        let params = [];
-        if (worker_id) {
-            query += ' AND wt.worker_id = ?';
-            params.push(worker_id);
-        }
-        query += ' ORDER BY wt.completed_at DESC';
-        res.json(dbAll(query, params));
-    } catch (err) {
-        res.status(500).json({ message: err.message });
-    }
+    query += ' ORDER BY wt.assigned_at DESC';
+    res.json(await dbAll(query, params));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-app.post('/api/worker-tasks', (req, res) => {
+app.get('/api/worker-tasks/completed', async (req, res) => {
+  try {
+    const { worker_id, range } = req.query;
+    let filter = "wt.status = 'completed'";
+    if (range === 'daily') filter += " AND DATE(wt.completed_at) = CURDATE()";
+    else if (range === 'weekly') filter += " AND DATE(wt.completed_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+    else if (range === 'monthly') filter += " AND DATE(wt.completed_at) >= DATE_FORMAT(CURDATE(), '%Y-%m-01')";
+    else if (range === 'yearly') filter += " AND DATE(wt.completed_at) >= CONCAT(YEAR(CURDATE()), '-01-01')";
+
+    let query = `SELECT wt.*, t.measurements, t.deadline, m.name as material_name, g.image_data as design_image
+                 FROM worker_tasks wt
+                 LEFT JOIN tailoring_orders t ON wt.reference_id = t.id AND wt.task_type = 'tailoring'
+                 LEFT JOIN gallery g ON t.style_id = g.id
+                 LEFT JOIN materials m ON t.material_id = m.id
+                 WHERE ${filter}`;
+    const params = [];
+    if (worker_id) {
+      query += ' AND wt.worker_id = ?';
+      params.push(worker_id);
+    }
+    query += ' ORDER BY wt.completed_at DESC';
+    res.json(await dbAll(query, params));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.post('/api/worker-tasks', async (req, res) => {
   try {
     const { worker_id, worker_name, task_type, task_id, task_code, task_description, assigned_by, notes } = req.body;
-    db.prepare(`
+    await dbRun(`
       INSERT INTO worker_tasks (worker_id, worker_name, task_type, reference_id, task_code, task_description, assigned_by, notes, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'assigned')
-    `).run(worker_id, worker_name, task_type, task_id, task_code, task_description, assigned_by, notes || null);
+    `, [worker_id, worker_name, task_type, task_id, task_code, task_description, assigned_by, notes || null]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.patch('/api/worker-tasks/:id/status', (req, res) => {
+app.patch('/api/worker-tasks/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
     if (status === 'completed') {
-      db.prepare('UPDATE worker_tasks SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
+      await dbRun('UPDATE worker_tasks SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
     } else {
-      db.prepare('UPDATE worker_tasks SET status = ? WHERE id = ?').run(status, id);
+      await dbRun('UPDATE worker_tasks SET status = ? WHERE id = ?', [status, id]);
     }
     res.json({ success: true });
   } catch (err) {
@@ -899,9 +907,9 @@ app.patch('/api/worker-tasks/:id/status', (req, res) => {
   }
 });
 
-app.delete('/api/worker-tasks/:id', (req, res) => {
+app.delete('/api/worker-tasks/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM worker_tasks WHERE id = ?').run(req.params.id);
+    await dbRun('DELETE FROM worker_tasks WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -909,36 +917,35 @@ app.delete('/api/worker-tasks/:id', (req, res) => {
 });
 
 // --- REPORTS ---
-app.get('/api/reports/:range', (req, res) => {
+app.get('/api/reports/:range', async (req, res) => {
   const { range } = req.params;
-  const dateExpr = "COALESCE(created_at, date)";
-  let filter = "1=1";
-  if (range === 'daily') filter = `date(${dateExpr}, 'localtime') = date('now', 'localtime')`;
-  else if (range === 'weekly') filter = `date(${dateExpr}, 'localtime') >= date('now', 'localtime', '-7 days')`;
-  else if (range === 'monthly') filter = `date(${dateExpr}, 'localtime') >= date('now', 'localtime', 'start of month')`;
-  else if (range === 'yearly') filter = `date(${dateExpr}, 'localtime') >= date('now', 'localtime', 'start of year')`;
+  let filter = '1=1';
+  if (range === 'daily') filter = `DATE(COALESCE(created_at, created_at)) = CURDATE()`;
+  else if (range === 'weekly') filter = `DATE(COALESCE(created_at, created_at)) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`;
+  else if (range === 'monthly') filter = `DATE(COALESCE(created_at, created_at)) >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`;
+  else if (range === 'yearly') filter = `DATE(COALESCE(created_at, created_at)) >= CONCAT(YEAR(CURDATE()), '-01-01')`;
 
   try {
-    const summary = dbGet(`SELECT count(*) as count, coalesce(sum(total_amount), 0) as total FROM sales WHERE ${filter}`);
-    const modes = dbAll(`SELECT payment_mode, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY payment_mode`);
-    const items = dbAll(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${filter} GROUP BY item_name ORDER BY qty DESC LIMIT 10`);
-    const salesByType = dbAll(`SELECT COALESCE(sale_type, 'pos') as sale_type, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY COALESCE(sale_type, 'pos')`);
+    const summary = await dbGet(`SELECT count(*) as count, COALESCE(sum(total_amount), 0) as total FROM sales WHERE ${filter}`);
+    const modes = await dbAll(`SELECT payment_mode, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY payment_mode`);
+    const items = await dbAll(`SELECT item_name, sum(quantity) as qty, sum(total) as total FROM sale_items JOIN sales ON sales.id = sale_items.sale_id WHERE ${filter} GROUP BY item_name ORDER BY qty DESC LIMIT 10`);
+    const salesByType = await dbAll(`SELECT COALESCE(sale_type, 'pos') as sale_type, count(*) as count, sum(total_amount) as total FROM sales WHERE ${filter} GROUP BY COALESCE(sale_type, 'pos')`);
 
-    let expFilter = "1=1";
-    if (range === 'daily') expFilter = "date(created_at, 'localtime') = date('now', 'localtime')";
-    else if (range === 'weekly') expFilter = "date(created_at, 'localtime') >= date('now', 'localtime', '-7 days')";
-    else if (range === 'monthly') expFilter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of month')";
-    else if (range === 'yearly') expFilter = "date(created_at, 'localtime') >= date('now', 'localtime', 'start of year')";
+    let expFilter = '1=1';
+    if (range === 'daily') expFilter = 'DATE(created_at) = CURDATE()';
+    else if (range === 'weekly') expFilter = 'DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)';
+    else if (range === 'monthly') expFilter = 'DATE(created_at) >= DATE_FORMAT(CURDATE(), "%Y-%m-01")';
+    else if (range === 'yearly') expFilter = 'DATE(created_at) >= CONCAT(YEAR(CURDATE()), "-01-01")';
 
-    const expensesSummary = dbGet(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM expenses WHERE ${expFilter}`);
-    const workforceSummary = dbGet(`SELECT coalesce(sum(amount), 0) as total, count(*) as count FROM workforce_payments WHERE ${expFilter}`);
+    const expensesSummary = await dbGet(`SELECT COALESCE(sum(amount), 0) as total, count(*) as count FROM expenses WHERE ${expFilter}`);
+    const workforceSummary = await dbGet(`SELECT COALESCE(sum(amount), 0) as total, count(*) as count FROM workforce_payments WHERE ${expFilter}`);
 
     let workDoneFilter = "status = 'completed'";
-    if (range === 'daily') workDoneFilter += " AND date(completed_at, 'localtime') = date('now', 'localtime')";
-    else if (range === 'weekly') workDoneFilter += " AND date(completed_at, 'localtime') >= date('now', 'localtime', '-7 days')";
-    else if (range === 'monthly') workDoneFilter += " AND date(completed_at, 'localtime') >= date('now', 'localtime', 'start of month')";
-    else if (range === 'yearly') workDoneFilter += " AND date(completed_at, 'localtime') >= date('now', 'localtime', 'start of year')";
-    const workDone = dbAll(`SELECT worker_name, task_type, count(*) as count FROM worker_tasks WHERE ${workDoneFilter} GROUP BY worker_name, task_type ORDER BY count DESC`);
+    if (range === 'daily') workDoneFilter += ' AND DATE(completed_at) = CURDATE()';
+    else if (range === 'weekly') workDoneFilter += ' AND DATE(completed_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)';
+    else if (range === 'monthly') workDoneFilter += ' AND DATE(completed_at) >= DATE_FORMAT(CURDATE(), "%Y-%m-01")';
+    else if (range === 'yearly') workDoneFilter += ' AND DATE(completed_at) >= CONCAT(YEAR(CURDATE()), "-01-01")';
+    const workDone = await dbAll(`SELECT worker_name, task_type, count(*) as count FROM worker_tasks WHERE ${workDoneFilter} GROUP BY worker_name, task_type ORDER BY count DESC`);
 
     res.json({ summary, modes, items, salesByType, expensesSummary, workforceSummary, workDone });
   } catch (err) {
@@ -947,12 +954,12 @@ app.get('/api/reports/:range', (req, res) => {
 });
 
 // --- BACKUP ---
-app.get('/api/backup', (req, res) => {
+app.get('/api/backup', async (req, res) => {
   try {
     const tables = ['users', 'items', 'sales', 'sale_items', 'services', 'fitting_deposits', 'tailoring_orders', 'expenses', 'workforce', 'workforce_payments', 'production_logs', 'settings', 'gallery'];
     const backup = {};
     for (const table of tables) {
-      backup[table] = dbAll(`SELECT * FROM ${table}`);
+      backup[table] = await dbAll(`SELECT * FROM ${table}`);
     }
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename=eunika_backup_' + Date.now() + '.json');

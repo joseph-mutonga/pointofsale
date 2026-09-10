@@ -2,9 +2,9 @@
 
 ## Steps to Test
 
-1. **Restart the Electron App**
-   - Close all Electron windows
-   - Run: `npm run electron`
+1. **Restart the Web App**
+   - Stop the running dev server if needed
+   - Run: `npm run dev`
    - Watch the terminal console for logs
 
 2. **Create a Test Order**
@@ -73,17 +73,18 @@
    - Material ID shows "null (Customer Provided)"
    - No foreign key errors occur
 
-## Database Location
+## Database Configuration
 
-The database file is: `pos.db` in your project root folder.
-All data persists between app restarts.
+The application uses MySQL Community Server. Configure `DB_HOST`, `DB_PORT`,
+`DB_USER`, `DB_PASSWORD`, and `DB_NAME` before starting the server. All data
+persists in the configured MySQL database.
 
 ## Troubleshooting
 
 If you see "❌ Error creating tailoring order:" in the console:
 - Read the error message carefully
 - It will tell you exactly what went wrong
-- Most likely: Missing required fields or database lock
+- Most likely: Missing required fields or a MySQL connection/schema error
 
 If orders don't appear in the list:
 - Check the retrieve logs

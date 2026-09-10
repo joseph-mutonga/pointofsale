@@ -1,10 +1,4 @@
-// In Electron production, relative URLs (like /api) resolve to file:///api, which fails.
-// We need to point to the actual Express server.
-const isElectron = typeof window !== 'undefined' && window.api !== undefined;
-const API_BASE_URL = isElectron ? 'http://localhost:5001/api' : '/api';
-
-// Capture the existing Electron bridge if it exists BEFORE it might be overwritten
-const electronBridge = window.api;
+const API_BASE_URL = '/api';
 
 async function apiFetch(endpoint, options = {}) {
   try {
@@ -28,10 +22,7 @@ async function apiFetch(endpoint, options = {}) {
 
 export const api = {
   login: (username, password) => apiFetch('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-  getAppLogo: async () => {
-    if (electronBridge && electronBridge.getAppLogo) return electronBridge.getAppLogo();
-    return '';
-  },
+  getAppLogo: async () => '',
   getItemByCode: (code) => apiFetch(`/items?code=${code}`),
   getAllItems: () => apiFetch('/items'),
   processSale: (saleData) => apiFetch('/sales/process', { method: 'POST', body: JSON.stringify(saleData) }),
@@ -47,10 +38,7 @@ export const api = {
   getColors: () => apiFetch('/colors'),
   getServices: () => apiFetch('/services'),
   addService: (data) => apiFetch('/services', { method: 'POST', body: JSON.stringify(data) }),
-  updateServicePayment: (data) => {
-    if (electronBridge && electronBridge.updateServicePayment) return electronBridge.updateServicePayment(data);
-    return apiFetch(`/services/${data.id}/payment`, { method: 'PATCH', body: JSON.stringify(data) });
-  },
+  updateServicePayment: (data) => apiFetch(`/services/${data.id}/payment`, { method: 'PATCH', body: JSON.stringify(data) }),
   getFittingDeposits: () => apiFetch('/fitting-deposits'),
   addFittingDeposit: (data) => apiFetch('/fitting-deposits', { method: 'POST', body: JSON.stringify(data) }),
   updateFittingPayment: (data) => apiFetch(`/fitting-deposits/${data.id}/payment`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -75,36 +63,17 @@ export const api = {
   unassignTask: (id) => apiFetch(`/worker-tasks/${id}`, { method: 'DELETE' }),
   getSettings: () => apiFetch('/settings'),
   updateSettings: (settings) => apiFetch('/settings', { method: 'POST', body: JSON.stringify(settings) }),
-  getGallery: () => {
-    if (electronBridge && electronBridge.getGallery) return electronBridge.getGallery();
-    return apiFetch('/gallery');
-  },
-  addGalleryItem: (data) => {
-    if (electronBridge && electronBridge.addGalleryItem) return electronBridge.addGalleryItem(data);
-    return apiFetch('/gallery', { method: 'POST', body: JSON.stringify(data) });
-  },
-  updateGalleryItem: (data) => {
-    if (electronBridge && electronBridge.updateGalleryItem) return electronBridge.updateGalleryItem(data);
-    return apiFetch(`/gallery/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) });
-  },
-  deleteGalleryItem: (id) => {
-    if (electronBridge && electronBridge.deleteGalleryItem) return electronBridge.deleteGalleryItem(id);
-    return apiFetch(`/gallery/${id}`, { method: 'DELETE' });
-  },
+  getGallery: () => apiFetch('/gallery'),
+  addGalleryItem: (data) => apiFetch('/gallery', { method: 'POST', body: JSON.stringify(data) }),
+  updateGalleryItem: (data) => apiFetch(`/gallery/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteGalleryItem: (id) => apiFetch(`/gallery/${id}`, { method: 'DELETE' }),
   addMaterial: (name) => apiFetch('/materials', { method: 'POST', body: JSON.stringify({ name }) }),
   deleteMaterial: (id) => apiFetch(`/materials/${id}`, { method: 'DELETE' }),
   addColor: (code, name) => apiFetch('/colors', { method: 'POST', body: JSON.stringify({ color_code: code, color_name: name }) }),
   deleteColor: (id) => apiFetch(`/colors/${id}`, { method: 'DELETE' }),
   backupDb: () => apiFetch('/backup'),
-  getPrinters: async () => {
-    if (electronBridge && electronBridge.getPrinters) return electronBridge.getPrinters();
-    return [];
-  },
+  getPrinters: async () => [],
   print: (html, frame = null) => {
-    if (electronBridge && electronBridge.print) {
-      return electronBridge.print(html);
-    }
-
     const targetFrame = frame || (() => {
       const printFrame = document.createElement('iframe');
       printFrame.setAttribute('style', 'position:fixed;left:-9999px;top:-9999px;width:0;height:0;border:0;opacity:0;pointer-events:none;');
@@ -119,28 +88,27 @@ export const api = {
       frameDoc.close();
       targetFrame.contentWindow.focus();
       setTimeout(() => {
-        try { targetFrame.contentWindow.print(); } catch (printErr) { console.warn('Print dialog failed:', printErr); }
+        try {
+          targetFrame.contentWindow.print();
+        } catch (printErr) {
+          console.warn('Print dialog failed:', printErr);
+        }
         setTimeout(() => {
           try {
             if (targetFrame && targetFrame.parentNode) targetFrame.parentNode.removeChild(targetFrame);
-          } catch (err) {}
+          } catch (err) {
+            console.warn('Cleanup failed:', err);
+          }
         }, 1500);
       }, 200);
       return { success: true };
     } catch (err) {
       console.warn('Inline print failed:', err);
-      return { success: false, message: 'Receipt print could not be triggered in this browser. Please try again or use the desktop version.' };
+      return { success: false, message: 'Receipt print could not be triggered in this browser.' };
     }
   },
-  getUnclaimedMpesa: async () => {
-    if (electronBridge && electronBridge.getUnclaimedMpesa) return electronBridge.getUnclaimedMpesa();
-    return apiFetch('/payments/unclaimed').catch(() => []);
-  },
-  claimMpesaPayment: async (code) => {
-    if (electronBridge && electronBridge.claimMpesaPayment) return electronBridge.claimMpesaPayment(code);
-    return apiFetch('/payments/claim', { method: 'POST', body: JSON.stringify({ code }) }).catch(() => ({ success: false }));
-  }
+  getUnclaimedMpesa: async () => apiFetch('/payments/unclaimed').catch(() => []),
+  claimMpesaPayment: async (code) => apiFetch('/payments/claim', { method: 'POST', body: JSON.stringify({ code }) }).catch(() => ({ success: false }))
 };
 
-// Globalize the unified API for compatibility with existing code
 window.api = api;

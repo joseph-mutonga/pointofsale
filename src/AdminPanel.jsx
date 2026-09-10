@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import logo from './assets/logo.png';
 import PrinterSettings from './components/PrinterSettings';
 
-export default function AdminPanel({ user, onBack, showToast, printExpenseReceipt, printWorkforcePaymentReceipt, base64Logo, loadData }) {
+export default function AdminPanel({ user, onBack, showToast, base64Logo, loadData }) {
     const [view, setView] = useState('inventory');
     const [items, setItems] = useState([]);
     const [users, setUsers] = useState([]);
@@ -27,7 +27,6 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
     const [workforcePayments, setWorkforcePayments] = useState([]);
     const [workforceDateFilter, setWorkforceDateFilter] = useState('');
     const [settings, setSettings] = useState({});
-    const [printers, setPrinters] = useState([]);
     const [galleryItems, setGalleryItems] = useState([]);
     const [galleryEdit, setGalleryEdit] = useState(null);
     const [workerTasks, setWorkerTasks] = useState([]);
@@ -101,8 +100,6 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
             } else if (view === 'settings') {
                 const res = await window.api.getSettings();
                 setSettings(res || {});
-                const prn = await window.api.getPrinters();
-                setPrinters(prn || []);
             }
 
             // Always check for low stock to show notification counts/banners
@@ -2280,7 +2277,7 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                     } else {
                                         if (showToast) showToast(data.message || 'Failed to update credentials', 'error');
                                     }
-                                } catch (err) {
+                                } catch {
                                     if (showToast) showToast('Error updating credentials', 'error');
                                 } finally {
                                     setProcessing(false);

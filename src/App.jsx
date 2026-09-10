@@ -647,7 +647,7 @@ function App() {
             <div>DATE : ${new Date().toLocaleDateString()}</div>
           </div>
 
-          ${sets.map((set, idx) => `
+          ${sets.map((set) => `
           <div class="specs-title">Measurements (Inches) - ${set.type ? set.type.toUpperCase() : 'CUSTOM'}</div>
           
           <div style="text-align: left;">

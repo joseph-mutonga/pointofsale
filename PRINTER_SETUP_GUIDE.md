@@ -154,7 +154,7 @@ All settings are stored in SQLite database:
 - `receipt_footer`: Custom message
 
 ### System-Level Integration
-- Printer communication via Electron's webContents.print()
+- Printer communication via the browser print dialog
 - Silent printing to thermal printers (no dialogs)
 - SILENTMODE: true for POS operation
 - Automatic fallback to PDF if printer unavailable
@@ -192,7 +192,7 @@ Before going live:
 - Monospace font for alignment
 
 ### Printer Communication
-- Uses Electron IPC channels
+- Uses browser print flow
 - Non-blocking (async) printing
 - Automatic retry mechanism
 - PDF fallback on failure

@@ -184,7 +184,7 @@ If balance payment doesn't save:
 - Check console for error messages
 - Verify cashier is logged in
 - Ensure service exists in database
-- Check Electron terminal output
+- Check the web server terminal output
 
 If admin doesn't see services:
 - Click refresh button (↻) in header

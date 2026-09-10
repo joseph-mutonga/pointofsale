@@ -17,8 +17,8 @@ export default function TailoringView({
     const [selectedStyle, setSelectedStyle] = useState(null);
     const [measurementSets, setMeasurementSets] = useState([]);
     const [showGalleryModal, setShowGalleryModal] = useState(false);
-    const [tailoringPaymentMode, setTailoringPaymentMode] = useState('Cash');
-    const [stkStatus, setStkStatus] = useState(null); // 'pending', 'success', 'failed'
+    const [tailoringPaymentMode] = useState('Cash');
+    const [, setStkStatus] = useState(null); // 'pending', 'success', 'failed'
     const formRef = useRef(null);
 
     const parseMeasurementSets = (measurements) => {
