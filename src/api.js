@@ -75,7 +75,22 @@ export const api = {
   unassignTask: (id) => apiFetch(`/worker-tasks/${id}`, { method: 'DELETE' }),
   getSettings: () => apiFetch('/settings'),
   updateSettings: (settings) => apiFetch('/settings', { method: 'POST', body: JSON.stringify(settings) }),
-  getGallery: () => apiFetch('/gallery'),
+  getGallery: () => {
+    if (electronBridge && electronBridge.getGallery) return electronBridge.getGallery();
+    return apiFetch('/gallery');
+  },
+  addGalleryItem: (data) => {
+    if (electronBridge && electronBridge.addGalleryItem) return electronBridge.addGalleryItem(data);
+    return apiFetch('/gallery', { method: 'POST', body: JSON.stringify(data) });
+  },
+  updateGalleryItem: (data) => {
+    if (electronBridge && electronBridge.updateGalleryItem) return electronBridge.updateGalleryItem(data);
+    return apiFetch(`/gallery/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  },
+  deleteGalleryItem: (id) => {
+    if (electronBridge && electronBridge.deleteGalleryItem) return electronBridge.deleteGalleryItem(id);
+    return apiFetch(`/gallery/${id}`, { method: 'DELETE' });
+  },
   addMaterial: (name) => apiFetch('/materials', { method: 'POST', body: JSON.stringify({ name }) }),
   deleteMaterial: (id) => apiFetch(`/materials/${id}`, { method: 'DELETE' }),
   addColor: (code, name) => apiFetch('/colors', { method: 'POST', body: JSON.stringify({ color_code: code, color_name: name }) }),

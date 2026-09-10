@@ -124,8 +124,9 @@ ipcMain.handle('add-gallery-item', (_, data) => {
 
 ipcMain.handle('update-gallery-item', (_, data) => {
     try {
-        db.prepare('UPDATE gallery SET title = ?, image_data = ?, category = ? WHERE id = ?')
-            .run(data.title, data.image_data, data.category, data.id);
+        const result = db.prepare('UPDATE gallery SET title = ?, image_data = COALESCE(?, image_data), category = ? WHERE id = ?')
+            .run(data.title, data.image_data || null, data.category, data.id);
+        if (result.changes === 0) return { success: false, message: 'Style not found' };
         return { success: true };
     } catch (e) {
         console.error('update-gallery-item error:', e);

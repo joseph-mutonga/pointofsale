@@ -528,6 +528,18 @@ app.post('/api/gallery', (req, res) => {
   }
 });
 
+app.patch('/api/gallery/:id', (req, res) => {
+  try {
+    const data = req.body;
+    const result = db.prepare('UPDATE gallery SET title = ?, image_data = COALESCE(?, image_data), category = ? WHERE id = ?')
+      .run(data.title, data.image_data || null, data.category, req.params.id);
+    if (result.changes === 0) return res.status(404).json({ success: false, message: 'Style not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.delete('/api/gallery/:id', (req, res) => {
   try {
     db.prepare('DELETE FROM gallery WHERE id = ?').run(req.params.id);

@@ -2179,20 +2179,34 @@ export default function AdminPanel({ user, onBack, showToast, printExpenseReceip
                                     if (res.success) {
                                         showToast('Style saved successfully!', 'success');
                                         setGalleryEdit(null);
-                                        loadAll();
-                                        if (loadData) loadData();
+                                        await loadAll();
+                                        if (loadData) await loadData();
                                     } else showToast(res.message, 'error');
+                                } catch (error) {
+                                    console.error('Failed to save gallery style:', error);
+                                    showToast(error.message || 'Failed to save style', 'error');
                                 } finally {
                                     setProcessing(false);
                                 }
                             }}>
                                 <div className="form-group">
                                     <label className="label">Style Title</label>
-                                    <input name="title" defaultValue={galleryEdit.title} placeholder="e.g. Slim Fit Tuxedo" required />
+                                    <input
+                                        name="title"
+                                        value={galleryEdit.title || ''}
+                                        onChange={(e) => setGalleryEdit({ ...galleryEdit, title: e.target.value })}
+                                        placeholder="e.g. Slim Fit Tuxedo"
+                                        required
+                                    />
                                 </div>
                                 <div className="form-group">
                                     <label className="label">Category</label>
-                                    <input name="category" defaultValue={galleryEdit.category} placeholder="e.g. Men's Collection" />
+                                    <input
+                                        name="category"
+                                        value={galleryEdit.category || ''}
+                                        onChange={(e) => setGalleryEdit({ ...galleryEdit, category: e.target.value })}
+                                        placeholder="e.g. Men's Collection"
+                                    />
                                 </div>
                                 <div className="form-group">
                                     <label className="label">Reference Image</label>
