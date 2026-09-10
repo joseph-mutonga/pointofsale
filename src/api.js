@@ -47,6 +47,10 @@ export const api = {
   getColors: () => apiFetch('/colors'),
   getServices: () => apiFetch('/services'),
   addService: (data) => apiFetch('/services', { method: 'POST', body: JSON.stringify(data) }),
+  updateServicePayment: (data) => {
+    if (electronBridge && electronBridge.updateServicePayment) return electronBridge.updateServicePayment(data);
+    return apiFetch(`/services/${data.id}/payment`, { method: 'PATCH', body: JSON.stringify(data) });
+  },
   getFittingDeposits: () => apiFetch('/fitting-deposits'),
   addFittingDeposit: (data) => apiFetch('/fitting-deposits', { method: 'POST', body: JSON.stringify(data) }),
   updateFittingPayment: (data) => apiFetch(`/fitting-deposits/${data.id}/payment`, { method: 'PATCH', body: JSON.stringify(data) }),
