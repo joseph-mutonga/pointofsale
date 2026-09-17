@@ -8,6 +8,32 @@ export default function GalleryView({ gallery, loadData, onBack, showToast, proc
     const [newImagePath, setNewImagePath] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
 
+    const handleImageChange = (file) => {
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const image = new Image();
+            image.onload = () => {
+                const maxDimension = 1200;
+                const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(image.width * scale));
+                canvas.height = Math.max(1, Math.round(image.height * scale));
+                canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+                let quality = 0.8;
+                let compressedImage = canvas.toDataURL('image/jpeg', quality);
+                while (compressedImage.length > 60000 && quality > 0.3) {
+                    quality -= 0.1;
+                    compressedImage = canvas.toDataURL('image/jpeg', quality);
+                }
+                setNewImage(compressedImage);
+            };
+            image.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+    };
+
     const categories = useMemo(() => {
         const cats = new Set((gallery || []).map(item => item.category).filter(Boolean));
         return ['All', ...Array.from(cats)];
@@ -352,10 +378,8 @@ export default function GalleryView({ gallery, loadData, onBack, showToast, proc
                                         onChange={e => {
                                             const file = e.target.files[0];
                                             if (file) {
-                                                setNewImagePath(file.path);
-                                                const reader = new FileReader();
-                                                reader.onloadend = () => setNewImage(reader.result);
-                                                reader.readAsDataURL(file);
+                                                setNewImagePath(null);
+                                                handleImageChange(file);
                                             }
                                         }}
                                     />

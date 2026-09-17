@@ -537,7 +537,7 @@ app.get('/api/gallery', async (req, res) => {
 app.post('/api/gallery', async (req, res) => {
   try {
     const data = req.body;
-    await dbRun('INSERT INTO gallery (title, description, image_data, category) VALUES (?, ?, ?, ?)', [data.title, data.description, data.image_data, data.category]);
+    await dbRun('INSERT INTO gallery (title, description, image_data, category) VALUES (?, ?, ?, ?)', [data.title, data.description || null, data.image_data, data.category]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
