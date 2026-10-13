@@ -1,6 +1,81 @@
 import { useState, useMemo, useRef } from 'react';
 import logo from '../assets/logo.png';
 
+const GARMENT_CONFIGS = {
+    trouser: {
+        id: 'trouser',
+        name: 'Trouser',
+        label: '👖 Trouser',
+        fields: [
+            { key: 'full_length', label: 'Full length' },
+            { key: 'waist', label: 'Waist' },
+            { key: 'hips', label: 'Hips' },
+            { key: 'thys', label: 'Thys' },
+            { key: 'knee', label: 'Knee' },
+            { key: 'bottom', label: 'Bottom' },
+            { key: 'crotch', label: 'Crotch' }
+        ]
+    },
+    shirt: {
+        id: 'shirt',
+        name: 'Shirt',
+        label: '👔 Shirt',
+        fields: [
+            { key: 'full_length', label: 'Full length' },
+            { key: 'sleeves_length', label: 'Sleeves length' },
+            { key: 'bicep_round', label: 'Bicep round' },
+            { key: 'wrist', label: 'Wrist' },
+            { key: 'chest', label: 'Chest' },
+            { key: 'waist', label: 'Waist' },
+            { key: 'hips', label: 'Hips' },
+            { key: 'collar', label: 'Collar' },
+            { key: 'shoulders', label: 'Shoulders' }
+        ]
+    },
+    dress: {
+        id: 'dress',
+        name: 'Dress',
+        label: '👗 Dress',
+        fields: [
+            { key: 'full_length', label: 'Full length' },
+            { key: 'shoulders', label: 'Shoulders' },
+            { key: 'chest_upper_bust', label: 'Chest /upper bust' },
+            { key: 'bust', label: 'Bust' },
+            { key: 'lower_bust', label: 'Lower bust' },
+            { key: 'waist', label: 'Waist' },
+            { key: 'hips', label: 'Hips' },
+            { key: 'sleeves_biceps', label: 'Sleeves/biceps' },
+            { key: 'shoulders_circumference', label: 'Shoulders circumference' }
+        ]
+    },
+    top: {
+        id: 'top',
+        name: 'Top',
+        label: '👚 Top',
+        fields: [
+            { key: 'shoulders', label: 'Shoulders' },
+            { key: 'bust', label: 'Bust' },
+            { key: 'waist', label: 'Waist' },
+            { key: 'hips', label: 'Hips' },
+            { key: 'full_length', label: 'Full length' },
+            { key: 'sleeves', label: 'Sleeves' },
+            { key: 'shoulders_circumference', label: 'Shoulders circumference' }
+        ]
+    }
+};
+
+const getFieldLabel = (type, key) => {
+    if (type && GARMENT_CONFIGS[type]) {
+        const found = GARMENT_CONFIGS[type].fields.find(f => f.key === key);
+        if (found) return found.label;
+    }
+    for (const g of Object.values(GARMENT_CONFIGS)) {
+        const found = g.fields.find(f => f.key === key);
+        if (found) return found.label;
+    }
+    return key.replace(/_/g, ' ');
+};
+
 export default function TailoringView({
     user, tailoringOrders, materials, gallery, loadData, onBack,
     printTailoringReceipt,
@@ -10,7 +85,7 @@ export default function TailoringView({
     setProcessing,
     unclaimedMpesa
 }) {
-    const [garmentType, setGarmentType] = useState('shirt');
+    const [garmentType, setGarmentType] = useState('trouser');
     const [orderSearch, setOrderSearch] = useState('');
     const [tailoringPayment, setTailoringPayment] = useState(null);
     const [tailoringOrderToView, setTailoringOrderToView] = useState(null);
@@ -32,59 +107,20 @@ export default function TailoringView({
 
     const getMeasurementTypeLabel = (measurements) => {
         const sets = parseMeasurementSets(measurements);
-        return sets.map(set => set.type || 'Custom').join(', ');
+        return sets.map(set => GARMENT_CONFIGS[set.type]?.name || (set.type ? set.type.toUpperCase() : 'Custom')).join(', ');
     };
-
-    const measurementFieldDefinitions = [
-        { name: 'm_neck', label: '1. Neck', types: ['shirt', 'jacket', 'dress', 'top', 'skirt'] },
-        { name: 'm_over_bust', label: '2. Over Bust', types: ['shirt', 'dress', 'top'] },
-        { name: 'm_chest', label: '3. Chest', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_under_bust', label: '4. Under Bust', types: ['shirt', 'dress', 'top'] },
-        { name: 'm_waist', label: '5. Waist', types: ['shirt', 'trouser', 'dress', 'skirt', 'jacket', 'top'] },
-        { name: 'm_hips', label: '6. Hips', types: ['shirt', 'trouser', 'dress', 'skirt', 'jacket'] },
-        { name: 'm_neck_to_heel', label: '7. Neck to Heel', types: ['dress', 'skirt'] },
-        { name: 'm_neck_to_above_knee', label: '8. Neck to Above Knee', types: ['dress', 'skirt'] },
-        { name: 'm_above_knee_to_ankle', label: '9. Above Knee to Ankle', types: ['trouser', 'dress', 'skirt'] },
-        { name: 'm_arm_length', label: '10. Arm Length', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_shoulder_seam', label: '11. Shoulder Seam', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_arm_hole', label: '12. Arm Hole', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_bicep', label: '13. Bicep', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_fore_arm', label: '14. Fore Arm', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_wrist', label: '15. Wrist', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_v_neck_cut', label: '16. V Neck Cut', types: ['shirt', 'dress', 'top'] },
-        { name: 'm_shoulder_to_waist', label: '17. Shoulder to Waist', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_waist_to_above_knee', label: '18. Waist to Above Knee', types: ['dress', 'skirt'] },
-        { name: 'm_waist_to_ankle', label: '19. Waist to Ankle', types: ['trouser', 'dress', 'skirt'] },
-        { name: 'm_shoulder', label: '20. Shoulder', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_thigh', label: '21. Thigh', types: ['trouser'] },
-        { name: 'm_knee', label: '22. Knee', types: ['trouser'] },
-        { name: 'm_trouser_button', label: '23. Trouser Button', types: ['trouser'] },
-        { name: 'm_sleeve_length', label: 'Sleeve Length', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_cuff', label: 'Cuff', types: ['shirt', 'jacket', 'dress', 'top'] },
-        { name: 'm_shirt_length', label: 'Shirt Length', types: ['shirt', 'top'] },
-        { name: 'm_front_width', label: 'Front Width', types: ['jacket'] },
-        { name: 'm_back_width', label: 'Back Width', types: ['jacket'] },
-        { name: 'm_jacket_length', label: 'Jacket Length', types: ['jacket'] },
-        { name: 'm_bust', label: 'Bust', types: ['dress'] },
-        { name: 'm_calf', label: 'Calf', types: ['trouser'] },
-        { name: 'm_inseam', label: 'Inseam', types: ['trouser'] },
-        { name: 'm_outseam', label: 'Outseam', types: ['trouser'] },
-        { name: 'm_rise', label: 'Rise', types: ['trouser'] },
-        { name: 'm_skirt_length', label: 'Skirt Length', types: ['skirt'] },
-        { name: 'm_dress_length', label: 'Dress Length', types: ['dress'] },
-    ];
 
     const renderMeasurementList = (measurements) => {
         const sets = parseMeasurementSets(measurements);
         return sets.map((set, idx) => (
             <div key={idx} style={{ marginBottom: '12px' }}>
-                <div style={{ fontWeight: '600', color: '#0f172a', marginBottom: '6px' }}>{set.type ? set.type.toUpperCase() : 'CUSTOM'}</div>
+                <div style={{ fontWeight: '600', color: '#0f172a', marginBottom: '6px' }}>{GARMENT_CONFIGS[set.type]?.name?.toUpperCase() || (set.type ? set.type.toUpperCase() : 'CUSTOM')}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                     {Object.entries(set)
                         .filter(([k, v]) => k !== 'notes' && k !== 'type' && v)
                         .map(([k, v]) => (
                             <div key={k} style={{ background: '#f8fafc', padding: '10px', borderRadius: '8px' }}>
-                                <div style={{ fontSize: '0.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{k.replace(/_/g, ' ')}</div>
+                                <div style={{ fontSize: '0.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{getFieldLabel(set.type, k)}</div>
                                 <div style={{ fontWeight: '700' }}>{v}</div>
                             </div>
                         ))}
@@ -98,46 +134,31 @@ export default function TailoringView({
         ));
     };
 
-    const buildMeasurementFromForm = (fd) => ({
-        type: garmentType,
-        neck: fd.get('m_neck'),
-        over_bust: fd.get('m_over_bust'),
-        chest: fd.get('m_chest'),
-        under_bust: fd.get('m_under_bust'),
-        waist: fd.get('m_waist'),
-        hips: fd.get('m_hips'),
-        neck_to_heel: fd.get('m_neck_to_heel'),
-        neck_to_above_knee: fd.get('m_neck_to_above_knee'),
-        above_knee_to_ankle: fd.get('m_above_knee_to_ankle'),
-        arm_length: fd.get('m_arm_length'),
-        shoulder_seam: fd.get('m_shoulder_seam'),
-        arm_hole: fd.get('m_arm_hole'),
-        bicep: fd.get('m_bicep'),
-        fore_arm: fd.get('m_fore_arm'),
-        wrist: fd.get('m_wrist'),
-        v_neck_cut: fd.get('m_v_neck_cut'),
-        shoulder_to_waist: fd.get('m_shoulder_to_waist'),
-        waist_to_above_knee: fd.get('m_waist_to_above_knee'),
-        waist_to_ankle: fd.get('m_waist_to_ankle'),
-        shoulder: fd.get('m_shoulder'),
-        thigh: fd.get('m_thigh'),
-        knee: fd.get('m_knee'),
-        trouser_button: fd.get('m_trouser_button'),
-        sleeve_length: fd.get('m_sleeve_length'),
-        cuff: fd.get('m_cuff'),
-        shirt_length: fd.get('m_shirt_length'),
-        front_width: fd.get('m_front_width'),
-        back_width: fd.get('m_back_width'),
-        jacket_length: fd.get('m_jacket_length'),
-        bust: fd.get('m_bust'),
-        calf: fd.get('m_calf'),
-        inseam: fd.get('m_inseam'),
-        outseam: fd.get('m_outseam'),
-        rise: fd.get('m_rise'),
-        skirt_length: fd.get('m_skirt_length'),
-        dress_length: fd.get('m_dress_length'),
-        notes: fd.get('m_notes')
-    });
+    const buildMeasurementFromForm = (fd) => {
+        const config = GARMENT_CONFIGS[garmentType];
+        const measurement = {
+            type: garmentType
+        };
+        if (config) {
+            config.fields.forEach(field => {
+                const val = fd.get(`m_${field.key}`);
+                if (val !== null && val !== undefined && String(val).trim() !== '') {
+                    measurement[field.key] = String(val).trim();
+                }
+            });
+        } else {
+            for (const [key, value] of fd.entries()) {
+                if (key.startsWith('m_') && key !== 'm_notes' && value && String(value).trim() !== '') {
+                    measurement[key.replace(/^m_/, '')] = String(value).trim();
+                }
+            }
+        }
+        const notes = fd.get('m_notes');
+        if (notes && String(notes).trim()) {
+            measurement.notes = String(notes).trim();
+        }
+        return measurement;
+    };
 
     const hasMeasurementValues = (measurement) => {
         return Object.entries(measurement).some(([key, value]) => {
@@ -162,8 +183,8 @@ export default function TailoringView({
         }
         setMeasurementSets(prev => [...prev, measurement]);
         clearMeasurementInputs();
-        setGarmentType('shirt');
-        if (showToast) showToast(`${measurement.type || 'Garment'} measurement added. You can add another or submit the order.`, 'success');
+        setGarmentType('trouser');
+        if (showToast) showToast(`${GARMENT_CONFIGS[measurement.type]?.name || measurement.type || 'Garment'} measurement added. You can add another or submit the order.`, 'success');
     };
 
     const filteredTailoring = useMemo(() => {
@@ -219,7 +240,7 @@ export default function TailoringView({
                 setSelectedStyle(null);
                 setMeasurementSets([]);
                 clearMeasurementInputs();
-                setGarmentType('shirt');
+                setGarmentType('trouser');
                 await loadData();
             } else {
                 if (showToast) showToast(res.message, 'error');
@@ -560,167 +581,52 @@ export default function TailoringView({
                                         fontSize: '1rem',
                                         fontWeight: '700'
                                     }} value={garmentType} onChange={e => setGarmentType(e.target.value)}>
-                                        <option value="shirt">👔 Premium Shirt</option>
-                                        <option value="trouser">👖 Custom Trouser</option>
-                                        <option value="jacket">🧥 Bespoke Jacket</option>
-                                        <option value="dress">👗 Signature Dress</option>
-                                        <option value="skirt">🩳 Elegant Skirt</option>
+                                        <option value="trouser">👖 Trouser</option>
+                                        <option value="shirt">👔 Shirt</option>
+                                        <option value="dress">👗 Dress</option>
+                                        <option value="top">👚 Top</option>
                                     </select>
                                 </div>
 
                                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '20px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                                    <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#00f2ff', marginBottom: '15px', textAlign: 'center' }}>
-                                        MEASUREMENT FIELDS
+                                    <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#00f2ff', marginBottom: '15px', textAlign: 'center', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                                        {GARMENT_CONFIGS[garmentType]?.name ? `${GARMENT_CONFIGS[garmentType].name.toUpperCase()} MEASUREMENT FIELDS` : 'MEASUREMENT FIELDS'}
                                     </div>
 
-                                    {/* Group measurements by category */}
-                                    <div style={{ display: 'grid', gap: '20px' }}>
-                                        {/* Upper Body Measurements */}
-                                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#94a3b8', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                                                Upper Body
-                                            </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-                                                {measurementFieldDefinitions.filter(field =>
-                                                    ['m_neck', 'm_over_bust', 'm_chest', 'm_under_bust', 'm_shoulder', 'm_shoulder_seam', 'm_arm_hole', 'm_arm_length', 'm_bicep', 'm_fore_arm', 'm_wrist', 'm_v_neck_cut', 'm_shoulder_to_waist'].includes(field.name)
-                                                ).map(field => {
-                                                    const isRelevant = field.types.some(type => type === garmentType);
-                                                    return (
-                                                        <label key={field.name} style={{
-                                                            display: 'flex',
-                                                            flexDirection: 'column',
-                                                            opacity: isRelevant ? 1 : 0.3,
-                                                            gap: '6px',
-                                                            transition: 'opacity 0.2s'
-                                                        }}>
-                                                            <span style={{
-                                                                fontSize: '0.75rem',
-                                                                color: isRelevant ? '#ffffff' : '#64748b',
-                                                                fontWeight: isRelevant ? '800' : '400',
-                                                                textAlign: 'center',
-                                                                textShadow: isRelevant ? '0 0 4px rgba(0, 242, 255, 0.3)' : 'none'
-                                                            }}>{field.label}</span>
-                                                            <input
-                                                                name={field.name}
-                                                                placeholder={isRelevant ? field.label : ''}
-                                                                disabled={!isRelevant}
-                                                                style={{
-                                                                    width: '100%',
-                                                                    borderRadius: '6px',
-                                                                    border: isRelevant ? '2px solid rgba(0, 242, 255, 0.4)' : '1px solid rgba(255,255,255,0.1)',
-                                                                    background: isRelevant ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255,255,255,0.03)',
-                                                                    color: '#ffffff',
-                                                                    padding: '8px 10px',
-                                                                    minHeight: '36px',
-                                                                    textAlign: 'center',
-                                                                    fontSize: '0.9rem',
-                                                                    fontWeight: '600',
-                                                                    boxShadow: isRelevant ? 'inset 0 0 8px rgba(0, 242, 255, 0.15)' : 'none'
-                                                                }}
-                                                            />
-                                                        </label>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-
-                                        {/* Lower Body Measurements */}
-                                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#94a3b8', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                                                Lower Body
-                                            </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-                                                {measurementFieldDefinitions.filter(field =>
-                                                    ['m_waist', 'm_hips', 'm_thigh', 'm_knee', 'm_calf', 'm_inseam', 'm_outseam', 'm_rise', 'm_trouser_button', 'm_waist_to_above_knee', 'm_above_knee_to_ankle', 'm_waist_to_ankle'].includes(field.name)
-                                                ).map(field => {
-                                                    const isRelevant = field.types.some(type => type === garmentType);
-                                                    return (
-                                                        <label key={field.name} style={{
-                                                            display: 'flex',
-                                                            flexDirection: 'column',
-                                                            opacity: isRelevant ? 1 : 0.3,
-                                                            gap: '6px',
-                                                            transition: 'opacity 0.2s'
-                                                        }}>
-                                                            <span style={{
-                                                                fontSize: '0.75rem',
-                                                                color: isRelevant ? '#ffffff' : '#64748b',
-                                                                fontWeight: isRelevant ? '800' : '400',
-                                                                textAlign: 'center',
-                                                                textShadow: isRelevant ? '0 0 4px rgba(0, 242, 255, 0.3)' : 'none'
-                                                            }}>{field.label}</span>
-                                                            <input
-                                                                name={field.name}
-                                                                placeholder={isRelevant ? field.label : ''}
-                                                                disabled={!isRelevant}
-                                                                style={{
-                                                                    width: '100%',
-                                                                    borderRadius: '6px',
-                                                                    border: isRelevant ? '2px solid rgba(0, 242, 255, 0.4)' : '1px solid rgba(255,255,255,0.1)',
-                                                                    background: isRelevant ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255,255,255,0.03)',
-                                                                    color: '#ffffff',
-                                                                    padding: '8px 10px',
-                                                                    minHeight: '36px',
-                                                                    textAlign: 'center',
-                                                                    fontSize: '0.9rem',
-                                                                    fontWeight: '600',
-                                                                    boxShadow: isRelevant ? 'inset 0 0 8px rgba(0, 242, 255, 0.15)' : 'none'
-                                                                }}
-                                                            />
-                                                        </label>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-
-                                        {/* Garment Specific Measurements */}
-                                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#94a3b8', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                                                Garment Specific
-                                            </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-                                                {measurementFieldDefinitions.filter(field =>
-                                                    ['m_shirt_length', 'm_jacket_length', 'm_dress_length', 'm_skirt_length', 'm_front_width', 'm_back_width', 'm_cuff', 'm_sleeve_length', 'm_neck_to_heel', 'm_neck_to_above_knee'].includes(field.name)
-                                                ).map(field => {
-                                                    const isRelevant = field.types.some(type => type === garmentType);
-                                                    return (
-                                                        <label key={field.name} style={{
-                                                            display: 'flex',
-                                                            flexDirection: 'column',
-                                                            opacity: isRelevant ? 1 : 0.3,
-                                                            gap: '6px',
-                                                            transition: 'opacity 0.2s'
-                                                        }}>
-                                                            <span style={{
-                                                                fontSize: '0.75rem',
-                                                                color: isRelevant ? '#ffffff' : '#64748b',
-                                                                fontWeight: isRelevant ? '800' : '400',
-                                                                textAlign: 'center',
-                                                                textShadow: isRelevant ? '0 0 4px rgba(0, 242, 255, 0.3)' : 'none'
-                                                            }}>{field.label}</span>
-                                                            <input
-                                                                name={field.name}
-                                                                placeholder={isRelevant ? field.label : ''}
-                                                                disabled={!isRelevant}
-                                                                style={{
-                                                                    width: '100%',
-                                                                    borderRadius: '6px',
-                                                                    border: isRelevant ? '2px solid rgba(0, 242, 255, 0.4)' : '1px solid rgba(255,255,255,0.1)',
-                                                                    background: isRelevant ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255,255,255,0.03)',
-                                                                    color: '#ffffff',
-                                                                    padding: '8px 10px',
-                                                                    minHeight: '36px',
-                                                                    textAlign: 'center',
-                                                                    fontSize: '0.9rem',
-                                                                    fontWeight: '600',
-                                                                    boxShadow: isRelevant ? 'inset 0 0 8px rgba(0, 242, 255, 0.15)' : 'none'
-                                                                }}
-                                                            />
-                                                        </label>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
+                                    {/* Only measurement fields for selected garment */}
+                                    <div key={garmentType} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
+                                        {(GARMENT_CONFIGS[garmentType]?.fields || []).map(field => (
+                                            <label key={`${garmentType}_${field.key}`} style={{
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                gap: '6px'
+                                            }}>
+                                                <span style={{
+                                                    fontSize: '0.75rem',
+                                                    color: '#ffffff',
+                                                    fontWeight: '700',
+                                                    textAlign: 'center',
+                                                    textShadow: '0 0 4px rgba(0, 242, 255, 0.3)'
+                                                }}>{field.label}</span>
+                                                <input
+                                                    name={`m_${field.key}`}
+                                                    placeholder={`${field.label} (in)`}
+                                                    style={{
+                                                        width: '100%',
+                                                        borderRadius: '6px',
+                                                        border: '2px solid rgba(0, 242, 255, 0.4)',
+                                                        background: 'rgba(0, 0, 0, 0.5)',
+                                                        color: '#ffffff',
+                                                        padding: '8px 10px',
+                                                        minHeight: '36px',
+                                                        textAlign: 'center',
+                                                        fontSize: '0.9rem',
+                                                        fontWeight: '600',
+                                                        boxShadow: 'inset 0 0 8px rgba(0, 242, 255, 0.15)'
+                                                    }}
+                                                />
+                                            </label>
+                                        ))}
                                     </div>
 
                                     <div style={{ marginTop: '20px', padding: '15px', background: 'rgba(0, 242, 255, 0.05)', borderRadius: '8px', border: '1px solid rgba(0, 242, 255, 0.2)' }}>
@@ -744,7 +650,6 @@ export default function TailoringView({
                                                 fontSize: '0.9rem'
                                             }} onClick={() => {
                                                 clearMeasurementInputs();
-                                                setGarmentType('shirt');
                                             }}>
                                                 🔄 Clear Fields
                                             </button>
@@ -778,7 +683,7 @@ export default function TailoringView({
                                                                     color: '#00f2ff',
                                                                     marginBottom: '4px'
                                                                 }}>
-                                                                    {idx + 1}. {set.type ? set.type.toUpperCase() : 'CUSTOM'}
+                                                                    {idx + 1}. {GARMENT_CONFIGS[set.type]?.name || (set.type ? set.type.toUpperCase() : 'CUSTOM')}
                                                                 </div>
                                                                 <div style={{
                                                                     fontSize: '0.8rem',
@@ -789,7 +694,6 @@ export default function TailoringView({
                                                                 }}>
                                                                     {Object.entries(set)
                                                                         .filter(([k, v]) => k !== 'notes' && k !== 'type' && v)
-                                                                        .slice(0, 3)
                                                                         .map(([k, v]) => (
                                                                             <span key={k} style={{
                                                                                 background: 'rgba(0, 242, 255, 0.1)',
@@ -797,14 +701,9 @@ export default function TailoringView({
                                                                                 borderRadius: '4px',
                                                                                 fontSize: '0.7rem'
                                                                             }}>
-                                                                                {k.replace(/_/g, ' ')}: {v}
+                                                                                {getFieldLabel(set.type, k)}: {v}
                                                                             </span>
                                                                         ))}
-                                                                    {Object.entries(set).filter(([k, v]) => k !== 'notes' && k !== 'type' && v).length > 3 && (
-                                                                        <span style={{ color: '#64748b', fontSize: '0.7rem' }}>
-                                                                            +{Object.entries(set).filter(([k, v]) => k !== 'notes' && k !== 'type' && v).length - 3} more
-                                                                        </span>
-                                                                    )}
                                                                 </div>
                                                                 {set.notes && (
                                                                     <div style={{

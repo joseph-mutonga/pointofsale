@@ -21,11 +21,48 @@ The system allows you to record:
 - **Material**: Choose from available materials OR mark as "Customer Provided"
 
 #### Measurements Recording (in inches)
-- Chest
-- Waist
-- Hips
-- Shoulder
-- Length
+When you select a garment type, only the relevant measurement fields for that garment will appear:
+
+- **Trouser**:
+  - Full length
+  - Waist
+  - Hips
+  - Thys
+  - Knee
+  - Bottom
+  - Crotch
+
+- **Shirt**:
+  - Full length
+  - Sleeves length
+  - Bicep round
+  - Wrist
+  - Chest
+  - Waist
+  - Hips
+  - Collar
+  - Shoulders
+
+- **Dress**:
+  - Full length
+  - Shoulders
+  - Chest /upper bust
+  - Bust
+  - Lower bust
+  - Waist
+  - Hips
+  - Sleeves/biceps
+  - Shoulders circumference
+
+- **Top**:
+  - Shoulders
+  - Bust
+  - Waist
+  - Hips
+  - Full length
+  - Sleeves
+  - Shoulders circumference
+
 - Additional notes (free text area for special instructions)
 
 #### Pricing & Payment

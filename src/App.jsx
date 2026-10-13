@@ -940,7 +940,7 @@ function App() {
                                                               <div key={idx} style={{ marginBottom: idx < parseWorkerMeasurements(task.measurements).length - 1 ? '8px' : '0' }}>
                                                                   <span style={{ fontSize: '0.75rem', color: '#38bdf8', textTransform: 'uppercase', marginRight: '6px', fontWeight: 'bold' }}>{set.type || 'Custom'}:</span>
                                                                   <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
-                                                                      {Object.entries(set).filter(([k, v]) => k !== 'type' && v).map(([k, v]) => `${k.replace('m_', '').replace('_', ' ')}: ${v}`).join(', ')}
+                                                                      {Object.entries(set).filter(([k, v]) => k !== 'type' && k !== 'notes' && v).map(([k, v]) => `${k.replace('m_', '').replace(/_/g, ' ')}: ${v}`).join(', ')}
                                                                   </span>
                                                               </div>
                                                           ))}

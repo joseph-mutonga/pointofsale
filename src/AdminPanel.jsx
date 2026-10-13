@@ -2512,7 +2512,7 @@ export default function AdminPanel({ user, onBack, showToast, base64Logo, loadDa
                                                             if (k === 'notes' || k === 'type' || !v) return null;
                                                             return (
                                                                 <div key={k} style={{ background: '#f1f5f9', padding: '10px', borderRadius: '6px' }}>
-                                                                    <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{k.replace('_', ' ')}</div>
+                                                                    <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{k.replace(/_/g, ' ')}</div>
                                                                     <div style={{ fontSize: '1rem', fontWeight: 'bold' }}>{v} "</div>
                                                                 </div>
                                                             );
